@@ -20,11 +20,29 @@ async function doInvite(input: z.infer<typeof inviteSchema>) {
   });
   if (invErr) throw new Error(invErr.message);
 
+  let inviteLink: string | null = null;
+  try {
+    const linkRes = await supabaseAdmin.auth.admin.generateLink({
+      type: "invite",
+      email: input.email,
+      options: {
+        redirectTo: input.redirectTo,
+        data: { full_name: input.fullName },
+      },
+    });
+    if (linkRes.data?.properties?.action_link) {
+      inviteLink = linkRes.data.properties.action_link;
+    }
+  } catch (linkErr) {
+    console.warn("[doInvite] generateLink fallback:", linkErr);
+  }
+
   const { error } = await supabaseAdmin.auth.admin.inviteUserByEmail(input.email, {
     redirectTo: input.redirectTo,
     data: { full_name: input.fullName },
   });
-  if (!error) return { status: "invited" as const };
+
+  if (!error) return { status: "invited" as const, inviteLink };
 
   // Account already exists: attach it to the firm if it isn't in one yet.
   const { data: prof } = await supabaseAdmin.from("profiles").select("id, firm_id").ilike("email", input.email).maybeSingle();
@@ -33,7 +51,7 @@ async function doInvite(input: z.infer<typeof inviteSchema>) {
   await supabaseAdmin.from("profiles").update({ firm_id: input.firmId }).eq("id", prof.id);
   await supabaseAdmin.from("user_roles").upsert({ user_id: prof.id, role: input.role }, { onConflict: "user_id,role" });
   await supabaseAdmin.from("firm_invites").update({ accepted: true }).ilike("email", input.email).eq("firm_id", input.firmId);
-  return { status: "linked" as const };
+  return { status: "linked" as const, inviteLink: null };
 }
 
 export const inviteUser = createServerFn({ method: "POST" })
