@@ -1,3 +1,6 @@
+-- ========================================================
+-- CA PracticeDesk: Complete Database Schema & Migrations
+-- ========================================================
 -- PracticeDesk full backend (schema, security rules, functions, triggers, demo data)
 -- Run in order on a fresh Postgres/Supabase database.
 
@@ -314,9 +317,9 @@ do $$ declare t text; begin
 create or replace function public.job_status_trigger() returns trigger language plpgsql security definer set search_path=public as $$
 begin
   if TG_OP='INSERT' then
-    insert into public.job_status_history(job_id, old_status, new_status, reason, changed_by) values (new.id, null, new.status, 'Job created', auth.uid());
+    insert into public.job_status_history(firm_id, job_id, old_status, new_status, reason, changed_by) values (coalesce(new.firm_id, public.current_firm_id()), new.id, null, new.status, 'Job created', auth.uid());
   elsif new.status is distinct from old.status then
-    insert into public.job_status_history(job_id, old_status, new_status, reason, changed_by) values (new.id, old.status, new.status, nullif(current_setting('app.status_reason', true),''), auth.uid());
+    insert into public.job_status_history(firm_id, job_id, old_status, new_status, reason, changed_by) values (coalesce(new.firm_id, public.current_firm_id()), new.id, old.status, new.status, nullif(current_setting('app.status_reason', true),''), auth.uid());
   end if;
   return new;
 end $$;
@@ -859,10 +862,236 @@ begin
   return inv_id;
 end $$;
 
--- avatars storage policies
+-- avatars storage bucket & policies
+insert into storage.buckets (id, name, public) values ('avatars', 'avatars', true) on conflict (id) do nothing;
 create policy "avatars public read" on storage.objects for select using (bucket_id='avatars');
 create policy "avatars auth upload" on storage.objects for insert to authenticated with check (bucket_id='avatars');
 create policy "avatars auth update" on storage.objects for update to authenticated using (bucket_id='avatars');
 -- ===== supabase/migrations/20261001103801_9ebefd9f-0bff-4c51-ad45-897b97854f33.sql =====
 revoke execute on function public.is_super_admin(), public.current_firm_id(), public.set_acting_firm(uuid), public.create_firm(text,text,text,text,text), public.firm_overview(), public.firm_guard(text,uuid), public.protect_profile_firm() from public, anon;
 revoke execute on function public.protect_profile_firm(), public.firm_guard(text,uuid) from authenticated;
+
+-- ===== Migration 20261001140028 =====
+
+ALTER TABLE public.services ADD COLUMN IF NOT EXISTS sac_code text NOT NULL DEFAULT '998221';
+
+CREATE OR REPLACE FUNCTION public.generate_recurring_jobs_for_firm(_firm uuid, _upto date)
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
+declare cs record; ps date; pe date; step interval; n int := 0; svc record; lbl text;
+begin
+  for cs in select * from public.client_services where status='active' and firm_id=_firm loop
+    select * into svc from public.services where id=cs.service_id;
+    if cs.frequency='one_time' then
+      insert into public.jobs(firm_id, client_id, service_id, client_service_id, title, period_start, period_end, fee, due_date, assigned_staff, created_by)
+      values (_firm, cs.client_id, cs.service_id, cs.id, svc.name, cs.start_date, cs.start_date, cs.agreed_fee, cs.start_date + cs.due_days, cs.assigned_staff, auth.uid())
+      on conflict do nothing;
+      if found then n := n + 1; end if;
+      continue;
+    end if;
+    step := case cs.frequency when 'monthly' then interval '1 month' when 'quarterly' then interval '3 months' when 'half_yearly' then interval '6 months' else interval '1 year' end;
+    ps := date_trunc('month', cs.start_date)::date;
+    while ps <= _upto and (cs.end_date is null or ps <= cs.end_date) loop
+      pe := (ps + step - interval '1 day')::date;
+      lbl := case cs.frequency when 'monthly' then to_char(ps,'Mon YYYY') when 'yearly' then 'FY ' || to_char(ps,'YYYY') else to_char(ps,'Mon YYYY') || ' – ' || to_char(pe,'Mon YYYY') end;
+      insert into public.jobs(firm_id, client_id, service_id, client_service_id, title, period_start, period_end, fee, due_date, assigned_staff, created_by)
+      values (_firm, cs.client_id, cs.service_id, cs.id, svc.name || ' – ' || lbl, ps, pe, cs.agreed_fee, pe + cs.due_days, cs.assigned_staff, auth.uid())
+      on conflict do nothing;
+      if found then n := n + 1; end if;
+      ps := (ps + step)::date;
+    end loop;
+  end loop;
+  return n;
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.generate_recurring_jobs(_upto date)
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
+begin
+  if not public.is_finance() then raise exception 'Not authorised'; end if;
+  return public.generate_recurring_jobs_for_firm(public.current_firm_id(), _upto);
+end $function$;
+
+CREATE OR REPLACE FUNCTION public.generate_recurring_jobs_all()
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
+declare f record; n int := 0;
+begin
+  for f in select id from public.firms where status='active' loop
+    n := n + public.generate_recurring_jobs_for_firm(f.id, current_date);
+  end loop;
+  return n;
+end $function$;
+
+-- Lock down internal / trigger functions
+REVOKE EXECUTE ON FUNCTION public.generate_recurring_jobs_for_firm(uuid, date) FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.generate_recurring_jobs_all() FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.after_allocation() FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.audit_trigger() FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.job_status_trigger() FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.protect_profile_firm() FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.validate_allocation() FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.recalc_invoice(uuid) FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.recalc_payment(uuid) FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.firm_guard(text, uuid) FROM PUBLIC, anon, authenticated;
+
+-- App RPCs & RLS helpers: signed-in users only, never anonymous
+REVOKE EXECUTE ON FUNCTION public.allocate_payment(uuid, jsonb) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.cancel_invoice(uuid, text) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.client_lookup() FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.create_firm(text, text, text, text, text) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.create_invoice(uuid, uuid[], date, date, numeric, text, numeric, text, text, numeric) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.current_firm_id() FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.firm_overview() FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.generate_recurring_jobs(date) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.has_role(uuid, app_role) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.is_cashier() FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.is_finance() FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.is_manager() FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.is_staff_plus() FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.is_super_admin() FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.my_roles() FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.reverse_allocation(uuid, text) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.reverse_payment(uuid, text) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.set_acting_firm(uuid) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.update_job_status(uuid, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.allocate_payment(uuid, jsonb), public.cancel_invoice(uuid, text), public.client_lookup(), public.create_firm(text, text, text, text, text), public.create_invoice(uuid, uuid[], date, date, numeric, text, numeric, text, text, numeric), public.current_firm_id(), public.firm_overview(), public.generate_recurring_jobs(date), public.has_role(uuid, app_role), public.is_cashier(), public.is_finance(), public.is_manager(), public.is_staff_plus(), public.is_super_admin(), public.my_roles(), public.reverse_allocation(uuid, text), public.reverse_payment(uuid, text), public.set_acting_firm(uuid), public.update_job_status(uuid, text, text) TO authenticated;
+
+DO $$
+BEGIN
+  CREATE EXTENSION IF NOT EXISTS pg_cron;
+  PERFORM cron.schedule('daily-recurring-jobs', '30 0 * * *', 'select public.generate_recurring_jobs_all();');
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'pg_cron schedule skipped: %', SQLERRM;
+END $$;
+
+-- ===== Migration 20261002104000 (delete_firm RPC) =====
+
+CREATE OR REPLACE FUNCTION public.delete_firm(_firm_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
+declare f_status text;
+begin
+  if not public.is_super_admin() then
+    raise exception 'Not authorised: Only Super Admin can delete firms';
+  end if;
+
+  select status into f_status from public.firms where id = _firm_id;
+  if f_status is null then
+    raise exception 'Firm not found';
+  end if;
+
+  if f_status <> 'suspended' then
+    raise exception 'Firm must be suspended before it can be deleted';
+  end if;
+
+  -- Nullify active / acting references
+  update public.profiles set acting_firm_id = null where acting_firm_id = _firm_id;
+  update public.profiles set firm_id = null where firm_id = _firm_id;
+
+  -- Delete all associated firm data
+  delete from public.firm_invites where firm_id = _firm_id;
+  delete from public.audit_logs where firm_id = _firm_id;
+  delete from public.payment_allocations where firm_id = _firm_id;
+  delete from public.payment_reversals where firm_id = _firm_id;
+  delete from public.discounts where firm_id = _firm_id;
+  delete from public.invoice_items where firm_id = _firm_id;
+  delete from public.invoices where firm_id = _firm_id;
+  delete from public.payments where firm_id = _firm_id;
+  delete from public.bank_transactions where firm_id = _firm_id;
+  delete from public.job_status_history where firm_id = _firm_id;
+  delete from public.jobs where firm_id = _firm_id;
+  delete from public.client_services where firm_id = _firm_id;
+  delete from public.clients where firm_id = _firm_id;
+  delete from public.services where firm_id = _firm_id;
+  delete from public.settings where firm_id = _firm_id;
+  delete from public.firms where id = _firm_id;
+end $function$;
+
+REVOKE EXECUTE ON FUNCTION public.delete_firm(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.delete_firm(uuid) TO authenticated;
+
+-- ===== Migration 20261002203000 (Auto-Invoicing & Linked Status) =====
+
+ALTER TABLE public.services ADD COLUMN IF NOT EXISTS auto_invoice boolean NOT NULL DEFAULT false;
+ALTER TABLE public.client_services ADD COLUMN IF NOT EXISTS auto_invoice boolean NOT NULL DEFAULT false;
+ALTER TABLE public.jobs ADD COLUMN IF NOT EXISTS auto_invoice boolean NOT NULL DEFAULT false;
+
+CREATE OR REPLACE FUNCTION public.auto_invoice_job(_job_id uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  j record;
+  inv_id uuid;
+  item_desc text;
+BEGIN
+  SELECT * INTO j FROM public.jobs WHERE id = _job_id;
+  IF j.id IS NULL OR j.financial_status <> 'open' OR j.status <> 'completed' OR j.net_amount <= 0 THEN
+    RETURN NULL;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM public.invoice_items ii
+    JOIN public.invoices i ON i.id = ii.invoice_id
+    WHERE ii.job_id = j.id AND i.status <> 'cancelled'
+  ) THEN
+    UPDATE public.jobs SET financial_status = 'invoiced' WHERE id = _job_id;
+    RETURN NULL;
+  END IF;
+
+  item_desc := j.title;
+
+  INSERT INTO public.invoices (
+    firm_id,
+    client_id,
+    invoice_date,
+    due_date,
+    notes,
+    description,
+    subtotal,
+    discount,
+    tax_rate,
+    tax_amount,
+    total,
+    amount_paid,
+    status,
+    created_by
+  ) VALUES (
+    COALESCE(j.firm_id, public.current_firm_id()),
+    j.client_id,
+    current_date,
+    current_date + 15,
+    'Auto-generated invoice on completion of job ' || j.job_code,
+    item_desc,
+    j.net_amount,
+    0,
+    0,
+    0,
+    j.net_amount,
+    0,
+    'unpaid',
+    COALESCE(auth.uid(), j.created_by)
+  ) RETURNING id INTO inv_id;
+
+  INSERT INTO public.invoice_items (
+    firm_id,
+    invoice_id,
+    job_id,
+    description,
+    amount
+  ) VALUES (
+    COALESCE(j.firm_id, public.current_firm_id()),
+    inv_id,
+    j.id,
+    item_desc,
+    j.net_amount
+  );
+
+  UPDATE public.jobs
+  SET financial_status = 'invoiced'
+  WHERE id = _job_id;
+
+  RETURN inv_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.auto_invoice_job(uuid) TO authenticated;
+
+-- ========================================================
+

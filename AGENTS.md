@@ -10,3 +10,4 @@
 - Firm users join only via firm_invites consumed in handle_new_user (never signup metadata) — why: signup metadata is user-controlled.
 - Avatars/logos are stored as small resized data URLs in text columns — why: public storage buckets are blocked.
 - Recurring jobs are generated daily for all active firms by a pg_cron job calling generate_recurring_jobs_all (also on app open) — why: jobs must appear without anyone opening the app.
+- Auto-invoicing: When a job is marked completed with auto_invoice enabled, public.auto_invoice_job RPC runs as security definer to generate the invoice and link invoice_items without exposing direct invoice creation grants to staff — why: maintains strict finance isolation while automating billing.
