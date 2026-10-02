@@ -10,10 +10,10 @@ import { Field } from "@/components/app/common";
 export const Route = createFileRoute("/set-password")({
   head: () => ({
     meta: [
-      { title: "Set your password — PracticeDesk" },
-      { name: "description", content: "Finish setting up your PracticeDesk account." },
-      { property: "og:title", content: "Set your password — PracticeDesk" },
-      { property: "og:description", content: "Finish setting up your PracticeDesk account." },
+      { title: "Set your password — CA PracticeDesk" },
+      { name: "description", content: "Finish setting up your CA PracticeDesk account." },
+      { property: "og:title", content: "Set your password — CA PracticeDesk" },
+      { property: "og:description", content: "Finish setting up your CA PracticeDesk account." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],
