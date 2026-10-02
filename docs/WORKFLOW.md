@@ -1,0 +1,60 @@
+# PracticeDesk — Complete Guide
+
+CA practice management & billing for multiple firms. Indian ₹ formatting, DD-MM-YYYY dates.
+
+## 1. Who can do what
+
+| Role | Access |
+|---|---|
+| Super Admin (sankaaryanjayanth@gmail.com only) | Firms Console: create/suspend firms, invite owners, open any firm with full access, switch firms |
+| Owner | Everything in their firm, incl. users, roles, audit, settings |
+| Admin | Same as owner except creating owners |
+| Accountant | Clients, services, jobs, invoices, payments, clearing, receivables, reconciliation, reports |
+| Staff | Clients and jobs assigned to them; update job status |
+| Cashier | Payment entry and own payment history only — never fees, invoices, receivables |
+
+Each firm sees only its own data (enforced by the database, not the screens).
+
+## 2. Onboarding
+1. Super admin signs in → Firms Console → **Create firm** (name, logo, city, phone, owner email).
+2. Owner receives an invite email → sets password on the Set Password page.
+3. Owner fills **Settings** (firm details, GSTIN, PAN, bank details, default GST %) and invites team from **Users**.
+4. Nobody can join a firm by self sign-up; invites only.
+
+## 3. Day-to-day workflow
+```text
+Services -> Clients -> Client Services -> Jobs (auto) -> Invoices -> Payments -> Clearing -> Receivables -> Reconciliation -> Reports
+```
+1. **Services** — your price list: name, type, frequency, default fee, due days.
+2. **Clients** — profile, PAN/TAN/GSTIN, contacts, photo, assigned staff.
+3. **Client Services** — link a client to a service with agreed fee, frequency, start/end date, assigned staff.
+4. **Jobs** — generated automatically once a day (first time a billing user opens the app); never duplicated. Status: Pending → In Progress → Completed / On Hold / Cancelled. Every change is logged with reason. Past due date shows as Overdue automatically.
+5. **Invoices** — pick completed jobs (and/or extra line), discount with reason, GST. Totals calculated by the database. Printable invoice. Cancel only with reason (after reversing allocations). Never deleted.
+6. **Payments** — record cash/bank/UPI/cheque/card with reference. Reverse with reason if wrong.
+7. **Payment Clearing** — choose client; all their unallocated payments are pooled. "Auto-fill oldest first" settles oldest invoices; partial amounts mark invoices Partially Paid. Confirm to save. Allocations can be reversed.
+8. **Unallocated Payments** — advances not yet applied.
+9. **Outstanding** — every unpaid invoice; **Clear** opens clearing, **Remind** copies a reminder message.
+10. **Ageing** — owed amounts by Current / 1–30 / 31–60 / 61–90 / 90+ days.
+11. **Reconciliation** — import bank CSV (Date, Description, Reference, Amount, Debit/Credit or separate Credit/Debit columns). Suggested match by reference (UTR/cheque no.), else same amount within 3 days. Client name in the bank line is NOT required. Confirm match, pick a payment manually, mark reconciled, or ignore. Duplicate lines flagged.
+12. **Exceptions** — items needing attention.
+13. **Reports** — charts (monthly invoiced vs collected, payment modes, ageing, invoice/job status, top debtors, reconciliation) + 16 tabular reports with date/client/service filters, CSV export, print/PDF.
+14. **Audit Trail** — every create/change/cancel/reversal with user, time, old/new values.
+
+## 4. Business rules (enforced in database)
+- Allocation can't exceed payment balance or invoice outstanding; payment and invoice must be same client and firm.
+- Invoice status auto: Unpaid → Partially Paid → Paid; linked jobs auto-close when paid.
+- No deletion of financial records — cancel/reverse with reason only.
+- Recurring jobs de-duplicated per client service and period.
+- Overdue is calculated from due dates at read time.
+
+## 5. Technical overview
+- Frontend: React 19 + TanStack Start, Tailwind, recharts. Routes in `src/routes/_authenticated/*`.
+- Backend: Supabase (Postgres + auth). Full SQL in `docs/backend.sql` (tables, row security, functions, triggers, demo data).
+- Key database functions: `create_invoice`, `cancel_invoice`, `allocate_payment`, `reverse_allocation`, `reverse_payment`, `update_job_status`, `generate_recurring_jobs`, `create_firm`, `set_acting_firm`, `firm_overview`, role helpers `is_finance/is_manager/is_cashier/is_super_admin`, `current_firm_id`.
+- Server functions: `src/lib/firms.functions.ts` (invite user, create firm).
+- Photos/logos stored as small resized images in the database.
+
+## 6. Known items / next steps
+- Remaining security notices refer to actions signed-in users must be able to run; each checks role and firm inside.
+- Change the super admin password from the one shared in chat.
+- Demo data has been removed.
