@@ -27,7 +27,10 @@ function JobsPage() {
   const q = useQuery({
     queryKey: ["jobs"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("jobs").select("*, clients(name), services(name)").order("due_date", { ascending: true });
+      const { data, error } = await supabase
+        .from("jobs")
+        .select("*, clients(name), services(name), invoice_items(invoice_id, invoices(id, invoice_no, status, total, amount_paid, outstanding))")
+        .order("due_date", { ascending: true });
       if (error) throw error;
       return data;
     },
@@ -62,7 +65,39 @@ function JobsPage() {
           ...(isFinance ? [{ key: "net", header: "Net", align: "right" as const, sort: (j: typeof all[number]) => Number(j.net_amount), render: (j: typeof all[number]) => inr(j.net_amount) }] : []),
           { key: "staff", header: "Staff", render: (j) => profiles?.find((p) => p.id === j.assigned_staff)?.full_name ?? "—" },
           { key: "st", header: "Status", render: (j) => <StatusBadge status={jobDisplayStatus(j)} /> },
-          { key: "fs", header: "Billing", render: (j) => <StatusBadge status={j.financial_status} /> },
+          {
+            key: "fs",
+            header: "Billing",
+            render: (j) => {
+              const inv = (j.invoice_items as Array<{ invoice_id: string; invoices: { id: string; invoice_no: string; status: string } | null }> | null)?.[0]?.invoices;
+              if (inv) {
+                return (
+                  <Link
+                    to="/invoices/$id"
+                    params={{ id: inv.id }}
+                    className="group inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium bg-muted/60 hover:bg-muted border border-border/50 transition-colors"
+                    title={`Click to open Invoice ${inv.invoice_no}`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <StatusBadge status={j.financial_status === "closed" ? "paid" : (inv.status || "invoiced")} />
+                    <span className="font-mono text-[11px] text-primary underline underline-offset-2 group-hover:text-primary/80">
+                      {inv.invoice_no}
+                    </span>
+                  </Link>
+                );
+              }
+              return (
+                <div className="inline-flex items-center gap-1.5">
+                  <StatusBadge status={j.financial_status} />
+                  {j.auto_invoice && (
+                    <span className="rounded bg-sky-500/10 px-1 py-0.5 text-[10px] font-semibold text-sky-600 dark:text-sky-400" title="Auto-invoicing enabled on job completion">
+                      Auto
+                    </span>
+                  )}
+                </div>
+              );
+            },
+          },
         ]} />
       <CreateJobDialog open={open} onOpenChange={setOpen} />
     </div>
@@ -74,7 +109,7 @@ function CreateJobDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
   const { data: clients } = useClientLookup();
   const { data: profiles } = useProfiles();
   const svcs = useQuery({ queryKey: ["services"], queryFn: async () => (await supabase.from("services").select("*").eq("active", true).order("name")).data ?? [] });
-  const [f, setF] = useState({ client_id: "", service_id: "", title: "", period_start: "", period_end: "", fee: "", discount: "0", due_date: today(), assigned_staff: "", notes: "" });
+  const [f, setF] = useState({ client_id: "", service_id: "", title: "", period_start: "", period_end: "", fee: "", discount: "0", due_date: today(), assigned_staff: "", notes: "", auto_invoice: false });
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((p) => ({ ...p, [k]: e.target.value }));
   const save = async () => {
     if (!f.client_id || !f.service_id) return toast.error("Client and service are required");
@@ -85,6 +120,7 @@ function CreateJobDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
     const { error } = await supabase.from("jobs").insert({
       client_id: f.client_id, service_id: f.service_id, title: f.title.trim() || svc?.name || "Job", fee, discount: disc,
       period_start: f.period_start || null, period_end: f.period_end || null, due_date: f.due_date || null, assigned_staff: f.assigned_staff || null, notes: f.notes || null,
+      auto_invoice: f.auto_invoice,
     });
     if (error) return toast.error(errMsg(error));
     toast.success("Job created");
@@ -97,7 +133,7 @@ function CreateJobDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
         <DialogHeader><DialogTitle>Create Job</DialogTitle></DialogHeader>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Client *"><NativeSelect value={f.client_id} onChange={set("client_id")}><option value="">Select…</option>{clients?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</NativeSelect></Field>
-          <Field label="Service *"><NativeSelect value={f.service_id} onChange={(e) => { const s = svcs.data?.find((x) => x.id === e.target.value); setF((p) => ({ ...p, service_id: e.target.value, fee: s ? String(s.default_fee) : p.fee, title: p.title || s?.name || "" })); }}><option value="">Select…</option>{svcs.data?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</NativeSelect></Field>
+          <Field label="Service *"><NativeSelect value={f.service_id} onChange={(e) => { const s = svcs.data?.find((x) => x.id === e.target.value); setF((p) => ({ ...p, service_id: e.target.value, fee: s ? String(s.default_fee) : p.fee, title: p.title || s?.name || "", auto_invoice: s?.auto_invoice ?? false })); }}><option value="">Select…</option>{svcs.data?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</NativeSelect></Field>
           <Field label="Title" className="sm:col-span-2"><Input value={f.title} onChange={set("title")} /></Field>
           <Field label="Period Start"><Input type="date" value={f.period_start} onChange={set("period_start")} /></Field>
           <Field label="Period End"><Input type="date" value={f.period_end} onChange={set("period_end")} /></Field>
@@ -105,6 +141,18 @@ function CreateJobDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
           <Field label="Discount (₹)"><Input type="number" min={0} value={f.discount} onChange={set("discount")} /></Field>
           <Field label="Due Date"><Input type="date" value={f.due_date} onChange={set("due_date")} /></Field>
           <Field label="Assigned Staff"><NativeSelect value={f.assigned_staff} onChange={set("assigned_staff")}><option value="">—</option>{profiles?.map((p) => <option key={p.id} value={p.id}>{p.full_name ?? p.email}</option>)}</NativeSelect></Field>
+          <div className="sm:col-span-2 flex items-center gap-2 rounded-md border p-2.5 bg-muted/20">
+            <input
+              type="checkbox"
+              id="create_job_auto_invoice"
+              checked={f.auto_invoice}
+              onChange={(e) => setF((p) => ({ ...p, auto_invoice: e.target.checked }))}
+              className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+            />
+            <label htmlFor="create_job_auto_invoice" className="text-xs font-medium cursor-pointer">
+              Automatically raise invoice when this job is marked Completed
+            </label>
+          </div>
           <Field label="Notes" className="sm:col-span-2"><Textarea rows={2} value={f.notes} onChange={set("notes")} /></Field>
         </div>
         <div className="text-sm text-muted-foreground">Net amount: <span className="font-semibold text-foreground">{inr(Number(f.fee || 0) - Number(f.discount || 0))}</span></div>

@@ -37,8 +37,8 @@ function ClientProfile() {
       const c = await supabase.from("clients").select("*").eq("id", id).maybeSingle();
       if (c.error) throw c.error;
       const [cs, jobs] = await Promise.all([
-        supabase.from("client_services").select("*, services(name, service_type)").eq("client_id", id).order("created_at"),
-        supabase.from("jobs").select("*, services(name)").eq("client_id", id).order("created_at", { ascending: false }),
+        supabase.from("client_services").select("*, services(name, service_type, auto_invoice)").eq("client_id", id).order("created_at"),
+        supabase.from("jobs").select("*, services(name), invoice_items(invoice_id, invoices(id, invoice_no, status))").eq("client_id", id).order("created_at", { ascending: false }),
       ]);
       let invoices: Awaited<ReturnType<typeof fetchInv>> = [];
       let payments: Awaited<ReturnType<typeof fetchPay>> = [];
@@ -68,6 +68,12 @@ function ClientProfile() {
     const { error } = await supabase.from("client_services").update({ status }).eq("id", csId);
     if (error) return toast.error(errMsg(error));
     toast.success(`Service ${status}`);
+    qc.invalidateQueries({ queryKey: ["client360"] });
+  };
+  const toggleCsAutoInvoice = async (csId: string, current: boolean) => {
+    const { error } = await supabase.from("client_services").update({ auto_invoice: !current }).eq("id", csId);
+    if (error) return toast.error(errMsg(error));
+    toast.success(!current ? "Auto-invoicing enabled" : "Auto-invoicing disabled");
     qc.invalidateQueries({ queryKey: ["client360"] });
   };
 
@@ -159,6 +165,26 @@ function ClientProfile() {
               { key: "sd", header: "Start", render: (r) => fmtDate(r.start_date) },
               { key: "ed", header: "End", render: (r) => fmtDate(r.end_date) },
               { key: "dd", header: "Due", render: (r) => `${r.due_days} days after period` },
+              {
+                key: "ai",
+                header: "Auto-Invoice",
+                render: (r) => isManager ? (
+                  <div className="flex items-center justify-center">
+                    <button
+                      type="button"
+                      onClick={() => toggleCsAutoInvoice(r.id, r.auto_invoice)}
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${r.auto_invoice ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+                      title={r.auto_invoice ? "Auto-invoicing ON: click to turn off" : "Auto-invoicing OFF: click to turn on"}
+                    >
+                      <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-background shadow-lg ring-0 transition duration-200 ease-in-out ${r.auto_invoice ? 'translate-x-4' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+                ) : (
+                  <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${r.auto_invoice ? 'bg-sky-500/10 text-sky-600' : 'text-muted-foreground'}`}>
+                    {r.auto_invoice ? "Yes" : "No"}
+                  </span>
+                ),
+              },
               { key: "st", header: "Status", render: (r) => <StatusBadge status={r.status} /> },
               { key: "a", header: "", render: (r) => isManager && (
                 <div className="flex gap-1">
@@ -177,7 +203,39 @@ function ClientProfile() {
               { key: "due", header: "Due", sort: (j) => j.due_date ?? "", render: (j) => fmtDate(j.due_date) },
               { key: "net", header: "Net", align: "right", render: (j) => isFinance ? inr(j.net_amount) : "—" },
               { key: "st", header: "Status", render: (j) => <StatusBadge status={jobDisplayStatus(j)} /> },
-              { key: "fs", header: "Billing", render: (j) => <StatusBadge status={j.financial_status} /> },
+              {
+                key: "fs",
+                header: "Billing",
+                render: (j) => {
+                  const inv = (j.invoice_items as Array<{ invoice_id: string; invoices: { id: string; invoice_no: string; status: string } | null }> | null)?.[0]?.invoices;
+                  if (inv) {
+                    return (
+                      <Link
+                        to="/invoices/$id"
+                        params={{ id: inv.id }}
+                        className="group inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium bg-muted/60 hover:bg-muted border border-border/50 transition-colors"
+                        title={`Click to open Invoice ${inv.invoice_no}`}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <StatusBadge status={j.financial_status === "closed" ? "paid" : (inv.status || "invoiced")} />
+                        <span className="font-mono text-[11px] text-primary underline underline-offset-2 group-hover:text-primary/80">
+                          {inv.invoice_no}
+                        </span>
+                      </Link>
+                    );
+                  }
+                  return (
+                    <div className="inline-flex items-center gap-1.5">
+                      <StatusBadge status={j.financial_status} />
+                      {j.auto_invoice && (
+                        <span className="rounded bg-sky-500/10 px-1 py-0.5 text-[10px] font-semibold text-sky-600 dark:text-sky-400" title="Auto-invoice enabled on completion">
+                          Auto
+                        </span>
+                      )}
+                    </div>
+                  );
+                },
+              },
             ]} />
         </TabsContent>
 
@@ -291,11 +349,11 @@ function LinkServiceDialog({ open, onOpenChange, clientId }: { open: boolean; on
   const qc = useQueryClient();
   const { data: profiles } = useProfiles();
   const svcs = useQuery({ queryKey: ["services"], queryFn: async () => (await supabase.from("services").select("*").eq("active", true).order("name")).data ?? [] });
-  const [f, setF] = useState({ service_id: "", agreed_fee: "", frequency: "monthly", start_date: today(), end_date: "", due_days: "20", assigned_staff: "", notes: "" });
+  const [f, setF] = useState({ service_id: "", agreed_fee: "", frequency: "monthly", start_date: today(), end_date: "", due_days: "20", assigned_staff: "", notes: "", auto_invoice: false });
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((p) => ({ ...p, [k]: e.target.value }));
   const pick = (sid: string) => {
     const s = svcs.data?.find((x) => x.id === sid);
-    setF((p) => ({ ...p, service_id: sid, agreed_fee: s ? String(s.default_fee) : "", frequency: s?.frequency ?? p.frequency, due_days: s ? String(s.due_days) : p.due_days }));
+    setF((p) => ({ ...p, service_id: sid, agreed_fee: s ? String(s.default_fee) : "", frequency: s?.frequency ?? p.frequency, due_days: s ? String(s.due_days) : p.due_days, auto_invoice: s?.auto_invoice ?? false }));
   };
   const save = async () => {
     if (!f.service_id) return toast.error("Choose a service");
@@ -304,6 +362,7 @@ function LinkServiceDialog({ open, onOpenChange, clientId }: { open: boolean; on
     const { error } = await supabase.from("client_services").insert({
       client_id: clientId, service_id: f.service_id, agreed_fee: Number(f.agreed_fee), frequency: f.frequency,
       start_date: f.start_date, end_date: f.end_date || null, due_days: Number(f.due_days) || 0, assigned_staff: f.assigned_staff || null, notes: f.notes || null,
+      auto_invoice: f.auto_invoice,
     });
     if (error) return toast.error(errMsg(error));
     toast.success("Service linked");
@@ -322,6 +381,18 @@ function LinkServiceDialog({ open, onOpenChange, clientId }: { open: boolean; on
           <Field label="End Date"><Input type="date" value={f.end_date} onChange={set("end_date")} /></Field>
           <Field label="Due (days after period end)"><Input type="number" value={f.due_days} onChange={set("due_days")} /></Field>
           <Field label="Assigned Staff"><NativeSelect value={f.assigned_staff} onChange={set("assigned_staff")}><option value="">—</option>{profiles?.map((p) => <option key={p.id} value={p.id}>{p.full_name ?? p.email}</option>)}</NativeSelect></Field>
+          <div className="sm:col-span-2 flex items-center gap-2 rounded-md border p-2.5 bg-muted/20">
+            <input
+              type="checkbox"
+              id="dialog_link_service_auto_invoice"
+              checked={f.auto_invoice}
+              onChange={(e) => setF((p) => ({ ...p, auto_invoice: e.target.checked }))}
+              className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+            />
+            <label htmlFor="dialog_link_service_auto_invoice" className="text-xs font-medium cursor-pointer">
+              Automatically raise invoice when recurring jobs for this service are marked Completed
+            </label>
+          </div>
           <Field label="Notes" className="sm:col-span-2"><Input value={f.notes} onChange={set("notes")} /></Field>
         </div>
         <DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button onClick={save}>Link</Button></DialogFooter>

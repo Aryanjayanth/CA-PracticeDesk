@@ -58,6 +58,12 @@ function RecurringPage() {
     if (error) return toast.error(errMsg(error));
     qc.invalidateQueries({ queryKey: ["client-services"] });
   };
+  const toggleAutoInvoice = async (id: string, current: boolean) => {
+    const { error } = await supabase.from("client_services").update({ auto_invoice: !current }).eq("id", id);
+    if (error) return toast.error(errMsg(error));
+    toast.success(!current ? "Auto-invoicing enabled on job completion" : "Auto-invoicing disabled");
+    qc.invalidateQueries({ queryKey: ["client-services"] });
+  };
 
   return (
     <div>
@@ -96,6 +102,26 @@ function RecurringPage() {
           { key: "fee", header: "Fee", align: "right", render: (r) => inr(r.agreed_fee) },
           { key: "sd", header: "Start", render: (r) => fmtDate(r.start_date) },
           { key: "ed", header: "End", render: (r) => fmtDate(r.end_date) },
+          {
+            key: "ai",
+            header: "Auto-Invoice",
+            render: (r) => isManager ? (
+              <div className="flex items-center justify-center">
+                <button
+                  type="button"
+                  onClick={() => toggleAutoInvoice(r.id, r.auto_invoice)}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${r.auto_invoice ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+                  title={r.auto_invoice ? "Auto-invoicing ON: click to turn off" : "Auto-invoicing OFF: click to turn on"}
+                >
+                  <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-background shadow-lg ring-0 transition duration-200 ease-in-out ${r.auto_invoice ? 'translate-x-4' : 'translate-x-0'}`} />
+                </button>
+              </div>
+            ) : (
+              <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${r.auto_invoice ? 'bg-sky-500/10 text-sky-600' : 'text-muted-foreground'}`}>
+                {r.auto_invoice ? "Yes" : "No"}
+              </span>
+            ),
+          },
           { key: "st", header: "Status", render: (r) => <StatusBadge status={r.status} /> },
           { key: "a", header: "", render: (r) => isManager && (
             <div className="flex gap-1">

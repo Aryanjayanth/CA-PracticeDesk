@@ -125,6 +125,7 @@ export type Database = {
         Row: {
           agreed_fee: number
           assigned_staff: string | null
+          auto_invoice: boolean
           client_id: string
           created_at: string
           due_days: number
@@ -140,6 +141,7 @@ export type Database = {
         Insert: {
           agreed_fee: number
           assigned_staff?: string | null
+          auto_invoice?: boolean
           client_id: string
           created_at?: string
           due_days?: number
@@ -155,6 +157,7 @@ export type Database = {
         Update: {
           agreed_fee?: number
           assigned_staff?: string | null
+          auto_invoice?: boolean
           client_id?: string
           created_at?: string
           due_days?: number
@@ -607,6 +610,7 @@ export type Database = {
       jobs: {
         Row: {
           assigned_staff: string | null
+          auto_invoice: boolean
           client_id: string
           client_service_id: string | null
           created_at: string
@@ -628,6 +632,7 @@ export type Database = {
         }
         Insert: {
           assigned_staff?: string | null
+          auto_invoice?: boolean
           client_id: string
           client_service_id?: string | null
           created_at?: string
@@ -649,6 +654,7 @@ export type Database = {
         }
         Update: {
           assigned_staff?: string | null
+          auto_invoice?: boolean
           client_id?: string
           client_service_id?: string | null
           created_at?: string
@@ -954,6 +960,7 @@ export type Database = {
       services: {
         Row: {
           active: boolean
+          auto_invoice: boolean
           billing_type: string
           created_at: string
           default_fee: number
@@ -969,6 +976,7 @@ export type Database = {
         }
         Insert: {
           active?: boolean
+          auto_invoice?: boolean
           billing_type?: string
           created_at?: string
           default_fee?: number
@@ -984,6 +992,7 @@ export type Database = {
         }
         Update: {
           active?: boolean
+          auto_invoice?: boolean
           billing_type?: string
           created_at?: string
           default_fee?: number
@@ -1129,6 +1138,7 @@ export type Database = {
         }
         Returns: string
       }
+      auto_invoice_job: { Args: { _job_id: string }; Returns: string | null }
       current_firm_id: { Args: never; Returns: string }
       firm_guard: { Args: { _id: string; _tbl: string }; Returns: undefined }
       firm_overview: {

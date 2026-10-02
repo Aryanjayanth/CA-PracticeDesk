@@ -1008,5 +1008,90 @@ end $function$;
 REVOKE EXECUTE ON FUNCTION public.delete_firm(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.delete_firm(uuid) TO authenticated;
 
+-- ===== Migration 20261002203000 (Auto-Invoicing & Linked Status) =====
+
+ALTER TABLE public.services ADD COLUMN IF NOT EXISTS auto_invoice boolean NOT NULL DEFAULT false;
+ALTER TABLE public.client_services ADD COLUMN IF NOT EXISTS auto_invoice boolean NOT NULL DEFAULT false;
+ALTER TABLE public.jobs ADD COLUMN IF NOT EXISTS auto_invoice boolean NOT NULL DEFAULT false;
+
+CREATE OR REPLACE FUNCTION public.auto_invoice_job(_job_id uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  j record;
+  inv_id uuid;
+  item_desc text;
+BEGIN
+  SELECT * INTO j FROM public.jobs WHERE id = _job_id;
+  IF j.id IS NULL OR j.financial_status <> 'open' OR j.status <> 'completed' OR j.net_amount <= 0 THEN
+    RETURN NULL;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM public.invoice_items ii
+    JOIN public.invoices i ON i.id = ii.invoice_id
+    WHERE ii.job_id = j.id AND i.status <> 'cancelled'
+  ) THEN
+    UPDATE public.jobs SET financial_status = 'invoiced' WHERE id = _job_id;
+    RETURN NULL;
+  END IF;
+
+  item_desc := j.title;
+
+  INSERT INTO public.invoices (
+    firm_id,
+    client_id,
+    invoice_date,
+    due_date,
+    notes,
+    description,
+    subtotal,
+    discount,
+    tax_rate,
+    tax_amount,
+    total,
+    amount_paid,
+    status,
+    created_by
+  ) VALUES (
+    COALESCE(j.firm_id, public.current_firm_id()),
+    j.client_id,
+    current_date,
+    current_date + 15,
+    'Auto-generated invoice on completion of job ' || j.job_code,
+    item_desc,
+    j.net_amount,
+    0,
+    0,
+    0,
+    j.net_amount,
+    0,
+    'unpaid',
+    COALESCE(auth.uid(), j.created_by)
+  ) RETURNING id INTO inv_id;
+
+  INSERT INTO public.invoice_items (
+    firm_id,
+    invoice_id,
+    job_id,
+    description,
+    amount
+  ) VALUES (
+    COALESCE(j.firm_id, public.current_firm_id()),
+    inv_id,
+    j.id,
+    item_desc,
+    j.net_amount
+  );
+
+  UPDATE public.jobs
+  SET financial_status = 'invoiced'
+  WHERE id = _job_id;
+
+  RETURN inv_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.auto_invoice_job(uuid) TO authenticated;
 
 -- ========================================================
+

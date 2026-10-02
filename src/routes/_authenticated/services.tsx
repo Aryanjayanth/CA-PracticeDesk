@@ -127,6 +127,15 @@ function ServicesPage() {
             render: (s) => s.sac_code || "998221",
           },
           {
+            key: "ai",
+            header: "Auto-Invoice",
+            render: (s) => (
+              <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${s.auto_invoice ? 'bg-sky-500/10 text-sky-600 dark:text-sky-400' : 'text-muted-foreground'}`}>
+                {s.auto_invoice ? "Yes" : "No"}
+              </span>
+            ),
+          },
+          {
             key: "a",
             header: "Status",
             render: (s) => (
@@ -163,6 +172,7 @@ function ServiceDialog({
     due_days: String(svc?.due_days ?? 20),
     sac_code: svc?.sac_code ?? "998221",
     active: svc?.active ?? true,
+    auto_invoice: svc?.auto_invoice ?? false,
   });
 
   const [sacChoice, setSacChoice] = useState(() => {
@@ -198,6 +208,7 @@ function ServiceDialog({
       default_fee: Number(f.default_fee || 0),
       due_days: Number(f.due_days || 0),
       sac_code: (sacChoice === "custom" ? f.sac_code.trim() : sacChoice) || "998221",
+      auto_invoice: f.auto_invoice,
     };
 
     const { error } = svc
@@ -340,6 +351,20 @@ function ServiceDialog({
               placeholder="e.g. Scope of work: Computation of output tax liability, ITC reconciliation against GSTR-2B, tax challan preparation and GSTR-3B filing."
             />
           </Field>
+
+          {/* Auto Invoicing */}
+          <div className="sm:col-span-2 flex items-center gap-2 rounded-md border p-2.5 bg-muted/20">
+            <input
+              type="checkbox"
+              id="service_dialog_auto_invoice"
+              checked={f.auto_invoice}
+              onChange={(e) => setF((p) => ({ ...p, auto_invoice: e.target.checked }))}
+              className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+            />
+            <label htmlFor="service_dialog_auto_invoice" className="text-xs font-medium cursor-pointer">
+              Default Auto-Invoicing: Automatically raise invoice when jobs for this service are marked Completed
+            </label>
+          </div>
         </div>
 
         <DialogFooter>
