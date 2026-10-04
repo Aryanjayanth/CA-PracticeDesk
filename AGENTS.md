@@ -17,3 +17,6 @@
 - exceljs is imported dynamically inside the import/export handlers — why: keep a ~1MB spreadsheet dependency out of the main bundle on a page only owners/admins open.
 - Casting for entity-driven Supabase reads/writes is isolated in `src/lib/io/db.ts` — why: the generated types bind each table's payload shape, which cannot survive a loop over a table union.
 - `npm run build` writes to `.output`, which vite's dev watcher ignores — why: watching those files alongside `npm run dev` exhausts memory (ENOMEM on Windows).
+- Fees and due-day rules live on `client_services` (the assignment), never on `services`; SAC codes are gone entirely — why: service-level rates had drifted from the assignments that actually get billed, and a single column cannot represent a client spanning several financial years.
+- `validate_service_required` also enforces that billing_type and frequency agree (non-recurring forces `one_time`) — why: the UI toggles between them, so the pair can contradict itself otherwise.
+- The due-date preview in `src/lib/service-options.ts` deliberately mirrors `generate_recurring_jobs_for_firm`, including its rolling `ps + step - 1 day` windows rather than calendar-aligned quarters — why: a preview that disagrees with the generator would be worse than none.

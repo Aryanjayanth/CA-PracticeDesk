@@ -28,9 +28,9 @@ Each firm sees only its own data (enforced by the database, not the screens).
 Services -> Clients -> Client Services -> Jobs (auto) -> Invoices -> Payments -> Clearing -> Receivables -> Reconciliation -> Reports
 ```
 
-1. **Services** — your price list: name, type, frequency, default fee, due days.
+1. **Services** — what your firm offers: name, service type, and a recurring toggle. If recurring, pick a frequency. Mandatory: name, type, billing type, frequency. **No fee or due-day rule here** — both are set per assignment.
 2. **Clients** — profile, PAN/TAN/GSTIN, contacts, photo, assigned staff.
-3. **Client Services** — link a client to a service with agreed fee, frequency, start/end date, assigned staff.
+3. **Client Services** — link a client to a service with the agreed fee, frequency, start/end date, due days and assigned staff. The form previews the first job that will be generated, e.g. _Apr 2026 (01-04-2026 to 30-04-2026) → due 20-05-2026_. Periods roll from the start month, so a quarterly retainer starting 20-11-2026 covers 01-11-2026 to 31-01-2027.
 4. **Jobs** — generated automatically once a day (first time a billing user opens the app); never duplicated. Status: Pending → In Progress → Completed / On Hold / Cancelled. Every change is logged with reason. Past due date shows as Overdue automatically.
 5. **Invoices** — pick completed jobs (and/or extra line), discount with reason, GST. Totals calculated by the database. Printable invoice. Cancel only with reason (after reversing allocations). Never deleted.
 6. **Payments** — record cash/bank/UPI/cheque/card with reference. Reverse with reason if wrong.

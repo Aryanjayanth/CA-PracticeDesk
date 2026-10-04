@@ -259,21 +259,6 @@ export const ENTITIES: Entity[] = [
         sample: "recurring",
       },
       {
-        key: "default_fee",
-        label: "Default Fee",
-        type: "number",
-        required: true,
-        sample: "5000",
-        note: "In rupees, no symbol or separators.",
-      },
-      {
-        key: "due_days",
-        label: "Due Days",
-        type: "number",
-        sample: "20",
-        note: "Days after the period ends before the invoice falls due.",
-      },
-      {
         key: "active",
         label: "Active",
         type: "boolean",

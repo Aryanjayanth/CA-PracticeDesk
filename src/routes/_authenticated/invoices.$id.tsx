@@ -74,10 +74,7 @@ function InvoiceView() {
     queryFn: async () => {
       const [i, items, al, disc, s] = await Promise.all([
         supabase.from("invoices").select("*, clients(*)").eq("id", id).maybeSingle(),
-        supabase
-          .from("invoice_items")
-          .select("*, jobs(job_code, services(sac_code))")
-          .eq("invoice_id", id),
+        supabase.from("invoice_items").select("*, jobs(job_code)").eq("invoice_id", id),
         supabase
           .from("payment_allocations")
           .select("*, payments(payment_code, payment_date, mode, reference)")
@@ -181,7 +178,6 @@ function InvoiceView() {
             <tr className="border-b text-left text-xs uppercase text-muted-foreground">
               <th className="py-2">#</th>
               <th>Description</th>
-              <th>SAC</th>
               <th className="text-right">Amount</th>
             </tr>
           </thead>
@@ -195,7 +191,6 @@ function InvoiceView() {
                     <span className="ml-2 text-xs text-muted-foreground">({it.jobs.job_code})</span>
                   )}
                 </td>
-                <td>{it.jobs?.services?.sac_code ?? "998221"}</td>
                 <td className="text-right tabular-nums">{inr(it.amount)}</td>
               </tr>
             ))}

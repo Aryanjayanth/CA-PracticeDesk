@@ -1,14 +1,13 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { X } from "lucide-react";
 import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Field, ChipSelect, NativeSelect, type ChipOption } from "./common";
+import { ChipSelect, Field, FormScreen, NativeSelect, Section, type ChipOption } from "./common";
 import { AvatarPicker } from "./EntityAvatar";
 import { useProfiles } from "@/hooks/use-roles";
 import {
@@ -215,300 +214,254 @@ export function ClientForm({
   // Full-bleed within the page content area: negative margins cancel <main>'s
   // padding so the form fills the space beside the sidebar, which stays visible.
   return (
-    <div
-      className="-m-5 flex min-h-[calc(100svh-4rem)] flex-col bg-background md:-m-8"
-      role="dialog"
-      aria-label={client ? `Edit ${client.name}` : "Add Client"}
+    <FormScreen
+      title={client ? `Edit ${client.name}` : "Add Client"}
+      label={client ? `Edit ${client.name}` : "Add Client"}
+      subtitle={
+        <>
+          Fields marked <span className="font-semibold text-destructive">*</span> are mandatory.
+        </>
+      }
+      onClose={() => onOpenChange(false)}
+      closeDisabled={busy}
+      footer={
+        <>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+            Cancel
+          </Button>
+          <Button onClick={save} disabled={busy}>
+            {busy ? "Saving…" : client ? "Save Changes" : "Add Client"}
+          </Button>
+        </>
+      }
     >
-      {/* Header — sticky below the app header so it stays put while the page scrolls */}
-      <div className="sticky top-16 z-10 flex shrink-0 items-center justify-between gap-4 border-b bg-card px-6 py-4">
-        <div>
-          <h2 className="text-lg font-semibold tracking-tight">
-            {client ? `Edit ${client.name}` : "Add Client"}
-          </h2>
-          <p className="text-xs text-muted-foreground">
-            Fields marked <span className="font-semibold text-destructive">*</span> are mandatory.
-          </p>
-        </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => onOpenChange(false)}
-          disabled={busy}
-          aria-label="Close"
-        >
-          <X className="h-4 w-4" />
-        </Button>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+        <AvatarPicker name={f.name} value={avatar} onChange={setAvatar} />
+        <p className="text-xs text-muted-foreground">
+          Client logo or photo. Stored as a small resized image inside the database.
+        </p>
       </div>
 
-      {/* Body — grows with content; the page scrolls, never a trapped inner box */}
-      <div className="mx-auto w-full max-w-5xl flex-1 space-y-8 px-6 py-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-          <AvatarPicker name={f.name} value={avatar} onChange={setAvatar} />
-          <p className="text-xs text-muted-foreground">
-            Client logo or photo. Stored as a small resized image inside the database.
-          </p>
-        </div>
-
-        {/* 1 — Identity */}
-        <Section title="Client Identity" hint="Who this client entity is.">
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Field
-              label={
-                <>
-                  Client Name <Req />
-                </>
-              }
-              className="sm:col-span-2"
-            >
-              <Input
-                required
-                value={f.name}
-                onChange={set("name")}
-                placeholder="Enter client name"
-              />
-            </Field>
-            <Field
-              label={
-                <>
-                  Phone Number <Req />
-                </>
-              }
-            >
-              <Input
-                required
-                value={f.mobile}
-                onChange={set("mobile")}
-                placeholder="Enter phone number"
-              />
-            </Field>
-          </div>
+      {/* 1 — Identity */}
+      <Section title="Client Identity" hint="Who this client entity is.">
+        <div className="grid gap-4 sm:grid-cols-3">
           <Field
             label={
               <>
-                Client Type <Req />
+                Client Name <Req />
               </>
             }
+            className="sm:col-span-2"
           >
-            <ChipSelect
-              ariaLabel="Client Type"
-              value={f.client_type}
-              onChange={(v) => pick("client_type", v || "Company")}
-              options={opts(CLIENT_TYPES)}
-            />
+            <Input required value={f.name} onChange={set("name")} placeholder="Enter client name" />
           </Field>
           <Field
             label={
               <>
-                Address <Req />
+                Phone Number <Req />
               </>
             }
           >
-            <Textarea
-              required
-              rows={2}
-              value={f.address}
-              onChange={set("address")}
-              placeholder="Enter address"
-            />
-          </Field>
-        </Section>
-
-        {/* 2 — Contacts */}
-        <Section
-          title="Contacts"
-          hint="Who you speak to at this client. The concerned person is optional."
-        >
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Field
-              label={
-                <>
-                  Secondary Phone{" "}
-                  <span className="font-normal text-muted-foreground">(optional)</span>
-                </>
-              }
-            >
-              <Input
-                value={f.secondary_phone}
-                onChange={set("secondary_phone")}
-                placeholder="Enter secondary phone"
-              />
-            </Field>
-            <Field label="Name of Concerned Person" hint="Optional">
-              <Input
-                value={f.contact_person_name}
-                onChange={set("contact_person_name")}
-                placeholder="Enter name"
-              />
-            </Field>
-            <Field label="Concerned Person's Phone" hint="Optional">
-              <Input
-                value={f.contact_person_phone}
-                onChange={set("contact_person_phone")}
-                placeholder="Enter phone number"
-              />
-            </Field>
-          </div>
-          <Field
-            label="Role of Concerned Person"
-            hint="Owner, accountant, director — whoever signs off on your behalf."
-          >
-            <ChipSelect
-              allowEmpty
-              emptyLabel="— Not set —"
-              ariaLabel="Role of Concerned Person"
-              value={f.contact_person_role}
-              onChange={(v) => pick("contact_person_role", v)}
-              options={opts(CONCERN_ROLES)}
-            />
-          </Field>
-          <Field label="Email" hint="Optional">
             <Input
-              type="email"
-              value={f.email}
-              onChange={set("email")}
-              placeholder="Enter email address"
+              required
+              value={f.mobile}
+              onChange={set("mobile")}
+              placeholder="Enter phone number"
             />
           </Field>
-        </Section>
-
-        {/* 3 — Tax identifiers */}
-        <Section
-          title="Tax Identifiers"
-          hint="PAN is mandatory; TAN and GSTIN apply where relevant."
+        </div>
+        <Field
+          label={
+            <>
+              Client Type <Req />
+            </>
+          }
         >
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Field
-              label={
-                <>
-                  PAN <Req />
-                </>
-              }
-            >
-              <Input
-                required
-                value={f.pan}
-                onChange={set("pan")}
-                className="uppercase font-mono"
-                placeholder="Enter PAN"
-                maxLength={10}
-              />
-            </Field>
-            <Field label="TAN">
-              <Input
-                value={f.tan}
-                onChange={set("tan")}
-                className="uppercase font-mono"
-                placeholder="Enter TAN"
-                maxLength={10}
-              />
-            </Field>
-            <Field label="GSTIN">
-              <Input
-                value={f.gstin}
-                onChange={set("gstin")}
-                className="uppercase font-mono"
-                placeholder="Enter GSTIN"
-                maxLength={15}
-              />
-            </Field>
-          </div>
-          <Field label="GST Type" hint="Optional">
+          <ChipSelect
+            ariaLabel="Client Type"
+            value={f.client_type}
+            onChange={(v) => pick("client_type", v || "Company")}
+            options={opts(CLIENT_TYPES)}
+          />
+        </Field>
+        <Field
+          label={
+            <>
+              Address <Req />
+            </>
+          }
+        >
+          <Textarea
+            required
+            rows={2}
+            value={f.address}
+            onChange={set("address")}
+            placeholder="Enter address"
+          />
+        </Field>
+      </Section>
+
+      {/* 2 — Contacts */}
+      <Section
+        title="Contacts"
+        hint="Who you speak to at this client. The concerned person is optional."
+      >
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Field
+            label={
+              <>
+                Secondary Phone{" "}
+                <span className="font-normal text-muted-foreground">(optional)</span>
+              </>
+            }
+          >
+            <Input
+              value={f.secondary_phone}
+              onChange={set("secondary_phone")}
+              placeholder="Enter secondary phone"
+            />
+          </Field>
+          <Field label="Name of Concerned Person" hint="Optional">
+            <Input
+              value={f.contact_person_name}
+              onChange={set("contact_person_name")}
+              placeholder="Enter name"
+            />
+          </Field>
+          <Field label="Concerned Person's Phone" hint="Optional">
+            <Input
+              value={f.contact_person_phone}
+              onChange={set("contact_person_phone")}
+              placeholder="Enter phone number"
+            />
+          </Field>
+        </div>
+        <Field
+          label="Role of Concerned Person"
+          hint="Owner, accountant, director — whoever signs off on your behalf."
+        >
+          <ChipSelect
+            allowEmpty
+            emptyLabel="— Not set —"
+            ariaLabel="Role of Concerned Person"
+            value={f.contact_person_role}
+            onChange={(v) => pick("contact_person_role", v)}
+            options={opts(CONCERN_ROLES)}
+          />
+        </Field>
+        <Field label="Email" hint="Optional">
+          <Input
+            type="email"
+            value={f.email}
+            onChange={set("email")}
+            placeholder="Enter email address"
+          />
+        </Field>
+      </Section>
+
+      {/* 3 — Tax identifiers */}
+      <Section title="Tax Identifiers" hint="PAN is mandatory; TAN and GSTIN apply where relevant.">
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Field
+            label={
+              <>
+                PAN <Req />
+              </>
+            }
+          >
+            <Input
+              required
+              value={f.pan}
+              onChange={set("pan")}
+              className="uppercase font-mono"
+              placeholder="Enter PAN"
+              maxLength={10}
+            />
+          </Field>
+          <Field label="TAN">
+            <Input
+              value={f.tan}
+              onChange={set("tan")}
+              className="uppercase font-mono"
+              placeholder="Enter TAN"
+              maxLength={10}
+            />
+          </Field>
+          <Field label="GSTIN">
+            <Input
+              value={f.gstin}
+              onChange={set("gstin")}
+              className="uppercase font-mono"
+              placeholder="Enter GSTIN"
+              maxLength={15}
+            />
+          </Field>
+        </div>
+        <Field label="GST Type" hint="Optional">
+          <ChipSelect
+            allowEmpty
+            emptyLabel="— Not set —"
+            ariaLabel="GST Type"
+            value={f.gst_type}
+            onChange={(v) => pick("gst_type", v)}
+            options={opts(GST_TYPES)}
+          />
+        </Field>
+      </Section>
+
+      {/* 4 — Practice setup */}
+      <Section title="Practice Setup" hint="How this client is serviced and billed.">
+        <Field label="Industry / Business Type">
+          <ChipSelect
+            ariaLabel="Industry"
+            allowEmpty
+            emptyLabel="— Not set —"
+            value={industrySelect === "Others" ? "" : industrySelect}
+            onChange={(v) => {
+              setIndustrySelect(v);
+              if (v !== "Others") setCustomIndustry("");
+            }}
+            options={opts(STANDARD_INDUSTRIES)}
+          />
+        </Field>
+        {industrySelect === "Others" && (
+          <Field label="Specify Custom Business Nature">
+            <Input
+              value={customIndustry}
+              onChange={(e) => setCustomIndustry(e.target.value)}
+              placeholder="Enter business nature"
+            />
+          </Field>
+        )}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Assigned Staff" hint="Leave unassigned to pick it up later.">
+            <NativeSelect value={f.assigned_staff} onChange={set("assigned_staff")}>
+              <option value="">— Unassigned —</option>
+              {profiles?.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.full_name ?? p.email}
+                </option>
+              ))}
+            </NativeSelect>
+          </Field>
+          <Field label="Status">
             <ChipSelect
-              allowEmpty
-              emptyLabel="— Not set —"
-              ariaLabel="GST Type"
-              value={f.gst_type}
-              onChange={(v) => pick("gst_type", v)}
-              options={opts(GST_TYPES)}
+              ariaLabel="Status"
+              value={f.status}
+              onChange={(v) => pick("status", v || "active")}
+              options={CLIENT_STATUSES.map((s) => ({ ...s }))}
             />
           </Field>
-        </Section>
-
-        {/* 4 — Practice setup */}
-        <Section title="Practice Setup" hint="How this client is serviced and billed.">
-          <Field label="Industry / Business Type">
-            <ChipSelect
-              ariaLabel="Industry"
-              allowEmpty
-              emptyLabel="— Not set —"
-              value={industrySelect === "Others" ? "" : industrySelect}
-              onChange={(v) => {
-                setIndustrySelect(v);
-                if (v !== "Others") setCustomIndustry("");
-              }}
-              options={opts(STANDARD_INDUSTRIES)}
-            />
-          </Field>
-          {industrySelect === "Others" && (
-            <Field label="Specify Custom Business Nature">
-              <Input
-                value={customIndustry}
-                onChange={(e) => setCustomIndustry(e.target.value)}
-                placeholder="Enter business nature"
-              />
-            </Field>
-          )}
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Assigned Staff" hint="Leave unassigned to pick it up later.">
-              <NativeSelect value={f.assigned_staff} onChange={set("assigned_staff")}>
-                <option value="">— Unassigned —</option>
-                {profiles?.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.full_name ?? p.email}
-                  </option>
-                ))}
-              </NativeSelect>
-            </Field>
-            <Field label="Status">
-              <ChipSelect
-                ariaLabel="Status"
-                value={f.status}
-                onChange={(v) => pick("status", v || "active")}
-                options={CLIENT_STATUSES.map((s) => ({ ...s }))}
-              />
-            </Field>
-          </div>
-          <Field label="Notes">
-            <Textarea
-              rows={2}
-              value={f.notes}
-              onChange={set("notes")}
-              placeholder="Enter any internal notes"
-            />
-          </Field>
-        </Section>
-      </div>
-
-      {/* Footer — sticky to the bottom of the viewport while the page scrolls */}
-      <div className="sticky bottom-0 z-10 mt-auto flex shrink-0 items-center justify-end gap-2 border-t bg-card px-6 py-3">
-        <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-          Cancel
-        </Button>
-        <Button onClick={save} disabled={busy}>
-          {busy ? "Saving…" : client ? "Save Changes" : "Add Client"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function Section({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="space-y-4 rounded-xl border bg-card p-5">
-      <div>
-        <h3 className="text-sm font-semibold uppercase tracking-wide">{title}</h3>
-        {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-      </div>
-      {children}
-    </section>
+        </div>
+        <Field label="Notes">
+          <Textarea
+            rows={2}
+            value={f.notes}
+            onChange={set("notes")}
+            placeholder="Enter any internal notes"
+          />
+        </Field>
+      </Section>
+    </FormScreen>
   );
 }

@@ -966,48 +966,39 @@ export type Database = {
           auto_invoice: boolean;
           billing_type: string;
           created_at: string;
-          default_fee: number;
           description: string | null;
-          due_days: number;
           firm_id: string;
           frequency: string;
           id: string;
           name: string;
-          sac_code: string;
           service_code: string;
           service_type: string;
         };
         Insert: {
           active?: boolean;
           auto_invoice?: boolean;
-          billing_type?: string;
+          billing_type: string;
           created_at?: string;
-          default_fee?: number;
           description?: string | null;
-          due_days?: number;
           firm_id?: string;
-          frequency?: string;
+          frequency: string;
           id?: string;
           name: string;
-          sac_code?: string;
           service_code?: string;
-          service_type?: string;
+          service_type: string;
         };
         Update: {
           active?: boolean;
           auto_invoice?: boolean;
-          billing_type?: string;
+          billing_type: string;
           created_at?: string;
-          default_fee?: number;
           description?: string | null;
-          due_days?: number;
           firm_id?: string;
-          frequency?: string;
+          frequency: string;
           id?: string;
           name?: string;
-          sac_code?: string;
           service_code?: string;
-          service_type?: string;
+          service_type: string;
         };
         Relationships: [
           {

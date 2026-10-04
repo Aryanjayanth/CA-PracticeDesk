@@ -3,6 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { X } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -12,6 +13,15 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+
+/** Shared layout constants so every full-screen record form lines up exactly. */
+export const FORM_SCREEN_CLASS =
+  "-m-5 flex min-h-[calc(100svh-4rem)] flex-col bg-background md:-m-8";
+export const FORM_HEADER_CLASS =
+  "sticky top-16 z-10 flex shrink-0 items-center justify-between gap-4 border-b bg-card px-6 py-4";
+export const FORM_BODY_CLASS = "mx-auto w-full max-w-5xl space-y-8 px-6 py-6";
+export const FORM_FOOTER_CLASS =
+  "flex shrink-0 items-center justify-end gap-2 border-t bg-card px-6 py-3";
 
 export function PageHeader({
   title,
@@ -179,6 +189,74 @@ export function ChipFilterRow({ label, children }: { label: string; children: Re
         {label}
       </div>
       <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
+}
+
+/** Titled card used to group fields in the full-screen client/service forms. */
+export function Section({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="space-y-4 rounded-xl border bg-card p-5">
+      <div>
+        <h3 className="text-sm font-semibold uppercase tracking-wide">{title}</h3>
+        {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/**
+ * Shell for the full-width record editors (client, service). Renders inside
+ * <main>, bleeding past its padding with negative margins so the form fills the
+ * content area while the sidebar stays visible.
+ */
+export function FormScreen({
+  title,
+  subtitle,
+  onClose,
+  closeDisabled,
+  label,
+  children,
+  footer,
+}: {
+  title: string;
+  subtitle?: ReactNode;
+  onClose: () => void;
+  closeDisabled?: boolean;
+  label?: string;
+  children: ReactNode;
+  footer: ReactNode;
+}) {
+  return (
+    <div className={cn(FORM_SCREEN_CLASS)} role="dialog" aria-label={label ?? title}>
+      <div className={FORM_HEADER_CLASS}>
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+          {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onClose}
+          disabled={closeDisabled}
+          aria-label="Close"
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className={FORM_BODY_CLASS}>{children}</div>
+      </div>
+      <div className={FORM_FOOTER_CLASS}>{footer}</div>
     </div>
   );
 }

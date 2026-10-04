@@ -247,6 +247,13 @@ function CreateJobDialog({
     queryFn: async () =>
       (await supabase.from("services").select("*").eq("active", true).order("name")).data ?? [],
   });
+  const csRows =
+    useQuery({
+      queryKey: ["client-services"],
+      queryFn: async () =>
+        (await supabase.from("client_services").select("client_id, service_id, agreed_fee")).data ??
+        [],
+    }).data ?? [];
   const [f, setF] = useState({
     client_id: "",
     service_id: "",
@@ -308,11 +315,17 @@ function CreateJobDialog({
             <NativeSelect
               value={f.service_id}
               onChange={(e) => {
-                const s = svcs.data?.find((x) => x.id === e.target.value);
+                const sid = e.target.value;
+                const s = svcs.data?.find((x) => x.id === sid);
+                // Services no longer carry a fee, so fall back to this client's
+                // existing assignment for the same service, if there is one.
+                const retainer = csRows.find(
+                  (r) => r.service_id === sid && r.client_id === f.client_id,
+                );
                 setF((p) => ({
                   ...p,
-                  service_id: e.target.value,
-                  fee: s ? String(s.default_fee) : p.fee,
+                  service_id: sid,
+                  fee: retainer ? String(retainer.agreed_fee) : "",
                   title: p.title || s?.name || "",
                   auto_invoice: s?.auto_invoice ?? false,
                 }));

@@ -92,15 +92,39 @@ create table public.services (
   id uuid primary key default gen_random_uuid(),
   service_code text not null unique default ('SV' || lpad(nextval('public.service_seq')::text,3,'0')),
   name text not null,
-  service_type text not null default 'Other',
+  service_type text not null,
   description text,
-  frequency text not null default 'monthly' check (frequency in ('one_time','monthly','quarterly','half_yearly','yearly')),
-  billing_type text not null default 'recurring' check (billing_type in ('recurring','one_time')),
-  default_fee numeric(14,2) not null default 0 check (default_fee >= 0),
-  due_days int not null default 20,
+  frequency text not null check (frequency in ('one_time','monthly','quarterly','half_yearly','yearly')),
+  billing_type text not null check (billing_type in ('recurring','one_time')),
   active boolean not null default true,
   created_at timestamptz not null default now()
 );
+create index on public.services(name);
+create index on public.services(active);
+
+-- Mandatory service fields — enforced in the DB so the rule holds regardless of client
+create or replace function public.validate_service_required() returns trigger
+language plpgsql security definer set search_path=public as $$
+declare
+  v_missing text;
+begin
+  v_missing := concat_ws(', ',
+    case when btrim(coalesce(new.name, '')) = ''         then 'Service Name' end,
+    case when btrim(coalesce(new.service_type, '')) = '' then 'Service Type' end,
+    case when btrim(coalesce(new.billing_type, '')) = '' then 'Billing Type' end,
+    case when btrim(coalesce(new.frequency, '')) = ''    then 'Frequency' end,
+    case when new.billing_type = 'one_time' and new.frequency <> 'one_time'
+      then 'Frequency must be One-time for a non-recurring service' end,
+    case when new.billing_type = 'recurring' and new.frequency = 'one_time'
+      then 'Choose a recurring frequency' end
+  );
+  if v_missing <> '' then
+    raise exception 'Missing required field(s): %', v_missing using errcode = '23502';
+  end if;
+  return new;
+end $$;
+create trigger services_validate_required before insert or update on public.services
+  for each row execute function public.validate_service_required();
 
 create table public.client_services (
   id uuid primary key default gen_random_uuid(),
@@ -518,13 +542,13 @@ create or replace function public.my_roles() returns setof app_role language sql
 revoke execute on function public.recalc_invoice(uuid), public.recalc_payment(uuid) from public, anon, authenticated;
 
 -- DEMO DATA
-insert into public.services(name, service_type, description, frequency, billing_type, default_fee, due_days) values
- ('GST Filing','GST','Monthly GSTR-1 & GSTR-3B','monthly','recurring',2000,20),
- ('TDS Filing','TDS','Quarterly TDS returns','quarterly','recurring',3000,31),
- ('Income Tax Return','Income Tax','Annual ITR filing','yearly','recurring',5000,120),
- ('Accounting','Accounting','Monthly bookkeeping','monthly','recurring',8000,15),
- ('Payroll','Payroll','Monthly payroll processing','monthly','recurring',3500,7),
- ('Audit','Audit','Statutory audit','one_time','one_time',50000,60);
+insert into public.services(name, service_type, description, frequency, billing_type) values
+ ('GST Filing','GST','Monthly GSTR-1 & GSTR-3B','monthly','recurring'),
+ ('TDS Filing','TDS','Quarterly TDS returns','quarterly','recurring'),
+ ('Income Tax Return','Income Tax','Annual ITR filing','yearly','recurring'),
+ ('Accounting','Accounting','Monthly bookkeeping','monthly','recurring'),
+ ('Payroll','Payroll','Monthly payroll processing','monthly','recurring'),
+ ('Audit','Audit','Statutory audit','one_time','one_time');
 
 insert into public.clients(name, client_type, mobile, secondary_phone, email, address, pan, gstin, gst_type, business_type, industry, contact_person_name, contact_person_phone, contact_person_role, is_demo, notes) values
  ('ABC Pvt Ltd','Company','9876543210','9876543212','accounts@abc.example','Koramangala, Bengaluru','AABCA1234F','29AABCA1234F1Z5','Regular','Private Limited','Manufacturing','Ravi Menon','9876543211','Owner',true,'DEMO client'),
@@ -898,7 +922,7 @@ revoke execute on function public.protect_profile_firm(), public.firm_guard(text
 
 -- ===== Migration 20261001140028 =====
 
-ALTER TABLE public.services ADD COLUMN IF NOT EXISTS sac_code text NOT NULL DEFAULT '998221';
+
 
 CREATE OR REPLACE FUNCTION public.generate_recurring_jobs_for_firm(_firm uuid, _upto date)
 RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$

@@ -20,6 +20,7 @@ import { StatusBadge } from "@/components/app/StatusBadge";
 import { ClientForm } from "@/components/app/ClientForm";
 import { EntityAvatar } from "@/components/app/EntityAvatar";
 import { useProfiles, useRoles } from "@/hooks/use-roles";
+import { firstDuePreview, monthLabel } from "@/lib/service-options";
 import { cn } from "@/lib/utils";
 import {
   errMsg,
@@ -684,15 +685,20 @@ function LinkServiceDialog({
     setF((p) => ({ ...p, [k]: e.target.value }));
   const pick = (sid: string) => {
     const s = svcs.data?.find((x) => x.id === sid);
+    // Fees and due-day rules now live on the assignment, so nothing is prefilled
+    // from the service beyond its cycle and its auto-invoice default.
     setF((p) => ({
       ...p,
       service_id: sid,
-      agreed_fee: s ? String(s.default_fee) : "",
-      frequency: s?.frequency ?? p.frequency,
-      due_days: s ? String(s.due_days) : p.due_days,
+      frequency: s?.frequency === "one_time" ? "one_time" : "monthly",
       auto_invoice: s?.auto_invoice ?? false,
     }));
   };
+
+  // Preview of the first job this assignment produces. Mirrors
+  // generate_recurring_jobs_for_firm, so what is shown is what gets created.
+  const preview = firstDuePreview(f.start_date, f.frequency, Number(f.due_days) || 0);
+
   const save = async () => {
     if (!f.service_id) return toast.error("Choose a service");
     if (!(Number(f.agreed_fee) >= 0) || f.agreed_fee === "")
@@ -752,8 +758,31 @@ function LinkServiceDialog({
             <Input type="date" value={f.end_date} onChange={set("end_date")} />
           </Field>
           <Field label="Due (days after period end)">
-            <Input type="number" value={f.due_days} onChange={set("due_days")} />
+            <Input type="number" min={0} value={f.due_days} onChange={set("due_days")} />
           </Field>
+          {preview && (
+            <div className="rounded-lg border border-primary/30 bg-primary/5 px-4 py-3 text-xs sm:col-span-2">
+              <div className="mb-1 font-medium text-foreground">First job this will create</div>
+              <div className="text-muted-foreground">
+                {f.frequency === "one_time" ? (
+                  <>
+                    One-time job on{" "}
+                    <span className="font-mono">{fmtDate(preview.periodStart)}</span>
+                  </>
+                ) : (
+                  <>
+                    Period{" "}
+                    <span className="font-medium text-foreground">
+                      {monthLabel(preview.periodStart)} ({fmtDate(preview.periodStart)} to{" "}
+                      {fmtDate(preview.periodEnd)})
+                    </span>
+                  </>
+                )}{" "}
+                &rarr; due{" "}
+                <span className="font-medium text-foreground">{fmtDate(preview.dueDate)}</span>
+              </div>
+            </div>
+          )}
           <Field label="Assigned Staff">
             <NativeSelect value={f.assigned_staff} onChange={set("assigned_staff")}>
               <option value="">—</option>
