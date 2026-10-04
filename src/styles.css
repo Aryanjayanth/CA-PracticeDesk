@@ -118,8 +118,12 @@
 }
 
 @media print {
-  .no-print { display: none !important; }
-  body { background: white; }
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white;
+  }
 }
 
 /* Hide scrollbars across sidebar navigation */

@@ -136,11 +136,5 @@ export function AnimatedSphere() {
     };
   }, []);
 
-  return (
-    <canvas
-      ref={canvasRef}
-      className="h-full w-full"
-      style={{ display: "block" }}
-    />
-  );
+  return <canvas ref={canvasRef} className="h-full w-full" style={{ display: "block" }} />;
 }

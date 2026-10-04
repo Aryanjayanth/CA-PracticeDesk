@@ -9,39 +9,89 @@ import { useRoles } from "@/hooks/use-roles";
 import { daysBetween, fmtDate, inr, MODES } from "@/lib/format";
 
 export const Route = createFileRoute("/_authenticated/unallocated")({
-  head: () => ({ meta: [{ title: "Unallocated Payments — CA PracticeDesk" }, { name: "description", content: "Payments not yet cleared." }] }),
+  head: () => ({
+    meta: [
+      { title: "Unallocated Payments — CA PracticeDesk" },
+      { name: "description", content: "Payments not yet cleared." },
+    ],
+  }),
   component: UnallocatedPage,
 });
 
 function UnallocatedPage() {
   const { isFinance, loading } = useRoles();
   const q = useQuery({
-    queryKey: ["unallocated"], enabled: isFinance,
-    queryFn: async () => (await supabase.from("payments").select("*, clients(name)").in("status", ["unallocated", "partially_allocated"]).order("payment_date")).data ?? [],
+    queryKey: ["unallocated"],
+    enabled: isFinance,
+    queryFn: async () =>
+      (
+        await supabase
+          .from("payments")
+          .select("*, clients(name)")
+          .in("status", ["unallocated", "partially_allocated"])
+          .order("payment_date")
+      ).data ?? [],
   });
   if (loading) return null;
   if (!isFinance) return <NoAccess />;
-  const total = (q.data ?? []).reduce((s, p) => s + Number(p.amount) - Number(p.allocated_amount), 0);
+  const total = (q.data ?? []).reduce(
+    (s, p) => s + Number(p.amount) - Number(p.allocated_amount),
+    0,
+  );
   return (
     <div>
-      <PageHeader title="Unallocated Payments" subtitle="Money received but not yet set off against invoices" />
+      <PageHeader
+        title="Unallocated Payments"
+        subtitle="Money received but not yet set off against invoices"
+      />
       <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard label="Payments" value={q.data?.length ?? 0} />
         <StatCard label="Unallocated Balance" value={inr(total)} tone="warning" />
       </div>
-      <DataTable rows={q.data} loading={q.isLoading} empty="No unallocated payments — everything is cleared." search={(p) => `${p.payment_code} ${p.clients?.name} ${p.reference}`}
+      <DataTable
+        rows={q.data}
+        loading={q.isLoading}
+        empty="No unallocated payments — everything is cleared."
+        search={(p) => `${p.payment_code} ${p.clients?.name} ${p.reference}`}
         columns={[
           { key: "payment_code", header: "Payment", className: "font-mono text-xs" },
-          { key: "c", header: "Client", sort: (p) => p.clients?.name ?? "", render: (p) => <span className="font-medium">{p.clients?.name}</span> },
-          { key: "d", header: "Date", sort: (p) => p.payment_date, render: (p) => fmtDate(p.payment_date) },
+          {
+            key: "c",
+            header: "Client",
+            sort: (p) => p.clients?.name ?? "",
+            render: (p) => <span className="font-medium">{p.clients?.name}</span>,
+          },
+          {
+            key: "d",
+            header: "Date",
+            sort: (p) => p.payment_date,
+            render: (p) => fmtDate(p.payment_date),
+          },
           { key: "age", header: "Age", render: (p) => `${daysBetween(p.payment_date)} days` },
           { key: "m", header: "Mode", render: (p) => MODES[p.mode] },
           { key: "reference", header: "Reference" },
           { key: "a", header: "Amount", align: "right", render: (p) => inr(p.amount) },
-          { key: "b", header: "Unallocated", align: "right", sort: (p) => Number(p.amount) - Number(p.allocated_amount), render: (p) => <b>{inr(Number(p.amount) - Number(p.allocated_amount))}</b> },
+          {
+            key: "b",
+            header: "Unallocated",
+            align: "right",
+            sort: (p) => Number(p.amount) - Number(p.allocated_amount),
+            render: (p) => <b>{inr(Number(p.amount) - Number(p.allocated_amount))}</b>,
+          },
           { key: "s", header: "Status", render: (p) => <StatusBadge status={p.status} /> },
-          { key: "x", header: "", render: (p) => <Button asChild size="sm" variant="outline"><Link to="/clearing" search={{ payment: p.id }}>Clear</Link></Button> },
-        ]} />
+          {
+            key: "x",
+            header: "",
+            render: (p) => (
+              <Button asChild size="sm" variant="outline">
+                <Link to="/clearing" search={{ payment: p.id }}>
+                  Clear
+                </Link>
+              </Button>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }

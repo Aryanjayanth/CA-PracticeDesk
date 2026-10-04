@@ -4,7 +4,12 @@ import { NoAccess, PageHeader } from "@/components/app/common";
 import { useRoles } from "@/hooks/use-roles";
 
 export const Route = createFileRoute("/_authenticated/roles")({
-  head: () => ({ meta: [{ title: "Roles & Permissions — CA PracticeDesk" }, { name: "description", content: "What each role can do." }] }),
+  head: () => ({
+    meta: [
+      { title: "Roles & Permissions — CA PracticeDesk" },
+      { name: "description", content: "What each role can do." },
+    ],
+  }),
   component: RolesPage,
 });
 
@@ -32,20 +37,46 @@ function RolesPage() {
   if (!isManager) return <NoAccess />;
   return (
     <div>
-      <PageHeader title="Roles & Permissions" subtitle="Enforced by the database itself, not only by hiding screens." />
+      <PageHeader
+        title="Roles & Permissions"
+        subtitle="Enforced by the database itself, not only by hiding screens."
+      />
       <div className="overflow-x-auto rounded-lg border bg-card">
         <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground"><tr><th className="px-4 py-2.5">Capability</th>{ROLES.map((r) => <th key={r} className="px-3 text-center">{r}</th>)}</tr></thead>
+          <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
+            <tr>
+              <th className="px-4 py-2.5">Capability</th>
+              {ROLES.map((r) => (
+                <th key={r} className="px-3 text-center">
+                  {r}
+                </th>
+              ))}
+            </tr>
+          </thead>
           <tbody>
             {MATRIX.map(([cap, v]) => (
-              <tr key={cap} className="border-t"><td className="px-4 py-2.5">{cap}</td>
-                {v.map((x, i) => <td key={i} className="text-center">{x === 1 ? <Check className="mx-auto h-4 w-4 text-success" /> : x === 2 ? <span className="text-xs text-warning-foreground">Own only</span> : <Minus className="mx-auto h-4 w-4 text-muted-foreground/50" />}</td>)}
+              <tr key={cap} className="border-t">
+                <td className="px-4 py-2.5">{cap}</td>
+                {v.map((x, i) => (
+                  <td key={i} className="text-center">
+                    {x === 1 ? (
+                      <Check className="mx-auto h-4 w-4 text-success" />
+                    ) : x === 2 ? (
+                      <span className="text-xs text-warning-foreground">Own only</span>
+                    ) : (
+                      <Minus className="mx-auto h-4 w-4 text-muted-foreground/50" />
+                    )}
+                  </td>
+                ))}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <p className="mt-3 text-xs text-muted-foreground">"Own only": Staff see only clients/jobs assigned to them; Cashiers see only payments they entered and never see invoice amounts, fees, receivables or reports.</p>
+      <p className="mt-3 text-xs text-muted-foreground">
+        "Own only": Staff see only clients/jobs assigned to them; Cashiers see only payments they
+        entered and never see invoice amounts, fees, receivables or reports.
+      </p>
     </div>
   );
 }

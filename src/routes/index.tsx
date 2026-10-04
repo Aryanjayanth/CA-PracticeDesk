@@ -6,9 +6,16 @@ export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "CA PracticeDesk — Practice Management & Billing" },
-      { name: "description", content: "Practice management and billing software for Chartered Accountants by Aryan Jayanth." },
+      {
+        name: "description",
+        content:
+          "Practice management and billing software for Chartered Accountants by Aryan Jayanth.",
+      },
       { property: "og:title", content: "CA PracticeDesk — Practice Management & Billing" },
-      { property: "og:description", content: "Practice management and billing software for Chartered Accountants." },
+      {
+        property: "og:description",
+        content: "Practice management and billing software for Chartered Accountants.",
+      },
     ],
   }),
   component: Index,
@@ -23,5 +30,9 @@ function Index() {
       navigate({ to: sa ? "/admin" : "/dashboard", replace: true });
     });
   }, [navigate]);
-  return <div className="flex min-h-screen items-center justify-center text-muted-foreground">Loading…</div>;
+  return (
+    <div className="flex min-h-screen items-center justify-center text-muted-foreground">
+      Loading…
+    </div>
+  );
 }

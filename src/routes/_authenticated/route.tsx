@@ -98,7 +98,8 @@ function Layout() {
                   <>
                     <h2 className="text-lg font-semibold">No firm access</h2>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      Your account isn't linked to an active firm. Ask your firm owner to invite you.
+                      Your account isn't linked to an active firm. Ask your firm owner to invite
+                      you.
                     </p>
                   </>
                 )}

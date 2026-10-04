@@ -15,7 +15,15 @@ export type Column<T> = {
 };
 
 export function DataTable<T extends { id: string | number }>({
-  rows, columns, search, loading, empty = "No records found", toolbar, pageSize = 15, onRowClick, footer,
+  rows,
+  columns,
+  search,
+  loading,
+  empty = "No records found",
+  toolbar,
+  pageSize = 15,
+  onRowClick,
+  footer,
 }: {
   rows: T[] | undefined;
   columns: Column<T>[];
@@ -57,7 +65,15 @@ export function DataTable<T extends { id: string | number }>({
           {search && (
             <div className="relative w-full max-w-xs">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} placeholder="Search…" className="pl-8 h-9" />
+              <Input
+                value={q}
+                onChange={(e) => {
+                  setQ(e.target.value);
+                  setPage(0);
+                }}
+                placeholder="Search…"
+                className="pl-8 h-9"
+              />
             </div>
           )}
           {toolbar}
@@ -68,12 +84,31 @@ export function DataTable<T extends { id: string | number }>({
           <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
               {columns.map((c) => (
-                <th key={c.key} className={cn("px-3 py-2.5 font-medium whitespace-nowrap", c.align === "right" && "text-right", c.className)}>
+                <th
+                  key={c.key}
+                  className={cn(
+                    "px-3 py-2.5 font-medium whitespace-nowrap",
+                    c.align === "right" && "text-right",
+                    c.className,
+                  )}
+                >
                   {c.sort ? (
-                    <button className="inline-flex items-center gap-1 hover:text-foreground" onClick={() => { if (sortKey === c.key) setDir((d) => (d === 1 ? -1 : 1)); else { setSortKey(c.key); setDir(1); } }}>
-                      {c.header}<ArrowUpDown className="h-3 w-3" />
+                    <button
+                      className="inline-flex items-center gap-1 hover:text-foreground"
+                      onClick={() => {
+                        if (sortKey === c.key) setDir((d) => (d === 1 ? -1 : 1));
+                        else {
+                          setSortKey(c.key);
+                          setDir(1);
+                        }
+                      }}
+                    >
+                      {c.header}
+                      <ArrowUpDown className="h-3 w-3" />
                     </button>
-                  ) : c.header}
+                  ) : (
+                    c.header
+                  )}
                 </th>
               ))}
             </tr>
@@ -81,18 +116,41 @@ export function DataTable<T extends { id: string | number }>({
           <tbody>
             {loading ? (
               Array.from({ length: 5 }).map((_, i) => (
-                <tr key={i} className="border-t"><td colSpan={columns.length} className="px-3 py-2"><Skeleton className="h-5 w-full" /></td></tr>
+                <tr key={i} className="border-t">
+                  <td colSpan={columns.length} className="px-3 py-2">
+                    <Skeleton className="h-5 w-full" />
+                  </td>
+                </tr>
               ))
             ) : slice.length === 0 ? (
-              <tr><td colSpan={columns.length} className="px-3 py-12 text-center text-muted-foreground">
-                <Inbox className="mx-auto mb-2 h-8 w-8 opacity-40" />{empty}
-              </td></tr>
+              <tr>
+                <td
+                  colSpan={columns.length}
+                  className="px-3 py-12 text-center text-muted-foreground"
+                >
+                  <Inbox className="mx-auto mb-2 h-8 w-8 opacity-40" />
+                  {empty}
+                </td>
+              </tr>
             ) : (
               slice.map((r) => (
-                <tr key={r.id} onClick={onRowClick ? () => onRowClick(r) : undefined} className={cn("border-t hover:bg-muted/40", onRowClick && "cursor-pointer")}>
+                <tr
+                  key={r.id}
+                  onClick={onRowClick ? () => onRowClick(r) : undefined}
+                  className={cn("border-t hover:bg-muted/40", onRowClick && "cursor-pointer")}
+                >
                   {columns.map((c) => (
-                    <td key={c.key} className={cn("px-3 py-2.5", c.align === "right" && "text-right tabular-nums", c.className)}>
-                      {c.render ? c.render(r) : String((r as Record<string, unknown>)[c.key] ?? "—")}
+                    <td
+                      key={c.key}
+                      className={cn(
+                        "px-3 py-2.5",
+                        c.align === "right" && "text-right tabular-nums",
+                        c.className,
+                      )}
+                    >
+                      {c.render
+                        ? c.render(r)
+                        : String((r as Record<string, unknown>)[c.key] ?? "—")}
                     </td>
                   ))}
                 </tr>
@@ -103,11 +161,31 @@ export function DataTable<T extends { id: string | number }>({
         </table>
       </div>
       <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
-        <span>{filtered.length} record{filtered.length === 1 ? "" : "s"}</span>
+        <span>
+          {filtered.length} record{filtered.length === 1 ? "" : "s"}
+        </span>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" className="h-7 w-7" disabled={cur === 0} onClick={() => setPage(cur - 1)}><ChevronLeft className="h-4 w-4" /></Button>
-          <span>Page {cur + 1} / {pages}</span>
-          <Button variant="ghost" size="icon" className="h-7 w-7" disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}><ChevronRight className="h-4 w-4" /></Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            disabled={cur === 0}
+            onClick={() => setPage(cur - 1)}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <span>
+            Page {cur + 1} / {pages}
+          </span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            disabled={cur >= pages - 1}
+            onClick={() => setPage(cur + 1)}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
         </div>
       </div>
     </div>

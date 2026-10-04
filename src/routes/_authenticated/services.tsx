@@ -56,7 +56,6 @@ const COMMON_SAC_CODES = [
   { code: "998311", label: "998311 — Management Consulting & Advisory" },
 ];
 
-
 const Req = () => <span className="text-red-500 font-semibold ml-0.5">*</span>;
 
 type Svc = Tables<"services">;
@@ -67,10 +66,7 @@ function ServicesPage() {
   const q = useQuery({
     queryKey: ["services-all"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("services")
-        .select("*")
-        .order("name");
+      const { data, error } = await supabase.from("services").select("*").order("name");
       if (error) throw error;
       return data;
     },
@@ -112,8 +108,7 @@ function ServicesPage() {
             header: "Default Fee",
             align: "right",
             sort: (s) => Number(s.default_fee),
-            render: (s) =>
-              isFinance || isManager ? inr(s.default_fee) : "—",
+            render: (s) => (isFinance || isManager ? inr(s.default_fee) : "—"),
           },
           {
             key: "due",
@@ -130,7 +125,9 @@ function ServicesPage() {
             key: "ai",
             header: "Auto-Invoice",
             render: (s) => (
-              <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${s.auto_invoice ? 'bg-sky-500/10 text-sky-600 dark:text-sky-400' : 'text-muted-foreground'}`}>
+              <span
+                className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${s.auto_invoice ? "bg-sky-500/10 text-sky-600 dark:text-sky-400" : "text-muted-foreground"}`}
+              >
                 {s.auto_invoice ? "Yes" : "No"}
               </span>
             ),
@@ -138,29 +135,16 @@ function ServicesPage() {
           {
             key: "a",
             header: "Status",
-            render: (s) => (
-              <StatusBadge status={s.active ? "active" : "inactive"} />
-            ),
+            render: (s) => <StatusBadge status={s.active ? "active" : "inactive"} />,
           },
         ]}
       />
-      {edit && (
-        <ServiceDialog
-          svc={edit === "new" ? null : edit}
-          onClose={() => setEdit(null)}
-        />
-      )}
+      {edit && <ServiceDialog svc={edit === "new" ? null : edit} onClose={() => setEdit(null)} />}
     </div>
   );
 }
 
-function ServiceDialog({
-  svc,
-  onClose,
-}: {
-  svc: Svc | null;
-  onClose: () => void;
-}) {
+function ServiceDialog({ svc, onClose }: { svc: Svc | null; onClose: () => void }) {
   const qc = useQueryClient();
   const [f, setF] = useState({
     name: svc?.name ?? "",
@@ -187,7 +171,12 @@ function ServiceDialog({
     setF((prev) => ({
       ...prev,
       billing_type: val,
-      frequency: val === "one_time" ? "one_time" : prev.frequency === "one_time" ? "monthly" : prev.frequency,
+      frequency:
+        val === "one_time"
+          ? "one_time"
+          : prev.frequency === "one_time"
+            ? "monthly"
+            : prev.frequency,
     }));
   };
 
@@ -230,7 +219,14 @@ function ServiceDialog({
 
         <div className="grid gap-3.5 sm:grid-cols-2">
           {/* Service Name */}
-          <Field label={<>Service Name <Req /></>} className="sm:col-span-2">
+          <Field
+            label={
+              <>
+                Service Name <Req />
+              </>
+            }
+            className="sm:col-span-2"
+          >
             <Input
               required
               value={f.name}
@@ -252,9 +248,7 @@ function ServiceDialog({
           <Field label="Status">
             <NativeSelect
               value={f.active ? "1" : "0"}
-              onChange={(e) =>
-                setF((p) => ({ ...p, active: e.target.value === "1" }))
-              }
+              onChange={(e) => setF((p) => ({ ...p, active: e.target.value === "1" }))}
             >
               <option value="1">Active</option>
               <option value="0">Inactive</option>
@@ -340,10 +334,7 @@ function ServiceDialog({
           </Field>
 
           {/* Description & Scope of Work */}
-          <Field
-            label="Scope of Work / Description"
-            className="sm:col-span-2"
-          >
+          <Field label="Scope of Work / Description" className="sm:col-span-2">
             <Textarea
               rows={2}
               value={f.description}
@@ -361,8 +352,12 @@ function ServiceDialog({
               onChange={(e) => setF((p) => ({ ...p, auto_invoice: e.target.checked }))}
               className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
             />
-            <label htmlFor="service_dialog_auto_invoice" className="text-xs font-medium cursor-pointer">
-              Default Auto-Invoicing: Automatically raise invoice when jobs for this service are marked Completed
+            <label
+              htmlFor="service_dialog_auto_invoice"
+              className="text-xs font-medium cursor-pointer"
+            >
+              Default Auto-Invoicing: Automatically raise invoice when jobs for this service are
+              marked Completed
             </label>
           </div>
         </div>

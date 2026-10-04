@@ -29,7 +29,10 @@ export function useProfiles() {
   return useQuery({
     queryKey: ["profiles"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("profiles").select("id, full_name, email, active").order("full_name");
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id, full_name, email, active")
+        .order("full_name");
       if (error) throw error;
       return data;
     },

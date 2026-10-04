@@ -93,9 +93,7 @@ function AuthPage() {
           <img src="/logo.png" alt="CA PracticeDesk" className="h-11 w-auto object-contain" />
           <div>
             <div className="text-xl font-bold tracking-tight text-white">CA PracticeDesk</div>
-            <div className="text-xs font-medium tracking-wide text-slate-400">
-              by Aryan Jayanth
-            </div>
+            <div className="text-xs font-medium tracking-wide text-slate-400">by Aryan Jayanth</div>
           </div>
         </div>
 
@@ -110,9 +108,9 @@ function AuthPage() {
           </h1>
 
           <p className="mt-5 max-w-xl text-base leading-relaxed text-slate-300/85">
-            A comprehensive practice management and billing solution designed specifically
-            for Chartered Accountants — managing retainers, compliance schedules, and receivables
-            with total audit clarity.
+            A comprehensive practice management and billing solution designed specifically for
+            Chartered Accountants — managing retainers, compliance schedules, and receivables with
+            total audit clarity.
           </p>
 
           {/* Elegant 3-Pillar Grid */}
@@ -126,9 +124,7 @@ function AuthPage() {
                   <item.icon className="h-4 w-4" />
                 </div>
                 <div className="text-sm font-semibold text-white">{item.title}</div>
-                <div className="mt-1.5 text-xs leading-relaxed text-slate-400">
-                  {item.desc}
-                </div>
+                <div className="mt-1.5 text-xs leading-relaxed text-slate-400">{item.desc}</div>
               </div>
             ))}
           </div>
@@ -151,10 +147,12 @@ function AuthPage() {
             <div className="rounded-[15px] bg-[#0b121e]/90 p-8 backdrop-blur-xl">
               {/* Header with Centered Logo & Title */}
               <div className="mb-7 flex flex-col items-center text-center">
-                <img src="/logo.png" alt="CA PracticeDesk Logo" className="mb-3.5 h-16 w-auto object-contain" />
-                <h2 className="text-2xl font-bold tracking-tight text-white">
-                  Welcome back
-                </h2>
+                <img
+                  src="/logo.png"
+                  alt="CA PracticeDesk Logo"
+                  className="mb-3.5 h-16 w-auto object-contain"
+                />
+                <h2 className="text-2xl font-bold tracking-tight text-white">Welcome back</h2>
                 <p className="mt-1.5 text-xs text-slate-400">
                   Enter your credentials to access your firm workspace.
                 </p>

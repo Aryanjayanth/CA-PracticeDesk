@@ -23,7 +23,10 @@ export function UserMenu() {
         <div className="font-medium">{user.email}</div>
         <div className="text-muted-foreground">{roles.map(label).join(", ") || "No role"}</div>
       </div>
-      <Button variant="outline" size="sm" onClick={signOut}><LogOut className="mr-1 h-4 w-4" />Sign out</Button>
+      <Button variant="outline" size="sm" onClick={signOut}>
+        <LogOut className="mr-1 h-4 w-4" />
+        Sign out
+      </Button>
     </div>
   );
 }

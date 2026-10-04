@@ -48,11 +48,31 @@ function SetPassword() {
       <Card className="w-full max-w-sm">
         <CardContent className="p-8">
           <h1 className="text-xl font-semibold">Set your password</h1>
-          <p className="mb-6 text-sm text-muted-foreground">{ready ? "Choose a password to finish setting up your account." : "Open this page from the link in your invite email."}</p>
+          <p className="mb-6 text-sm text-muted-foreground">
+            {ready
+              ? "Choose a password to finish setting up your account."
+              : "Open this page from the link in your invite email."}
+          </p>
           <form onSubmit={save} className="space-y-4">
-            <Field label="New password"><Input type="password" value={pw} onChange={(e) => setPw(e.target.value)} disabled={!ready} /></Field>
-            <Field label="Confirm password"><Input type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} disabled={!ready} /></Field>
-            <Button className="w-full" disabled={!ready || busy}>{busy ? "Saving…" : "Save password"}</Button>
+            <Field label="New password">
+              <Input
+                type="password"
+                value={pw}
+                onChange={(e) => setPw(e.target.value)}
+                disabled={!ready}
+              />
+            </Field>
+            <Field label="Confirm password">
+              <Input
+                type="password"
+                value={pw2}
+                onChange={(e) => setPw2(e.target.value)}
+                disabled={!ready}
+              />
+            </Field>
+            <Button className="w-full" disabled={!ready || busy}>
+              {busy ? "Saving…" : "Save password"}
+            </Button>
           </form>
         </CardContent>
       </Card>

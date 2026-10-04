@@ -19,7 +19,11 @@ export function useCurrentFirm() {
     queryFn: async () => {
       const { data: id } = await supabase.rpc("current_firm_id");
       if (!id) return null;
-      const { data } = await supabase.from("firms").select("*").eq("id", id as string).maybeSingle();
+      const { data } = await supabase
+        .from("firms")
+        .select("*")
+        .eq("id", id as string)
+        .maybeSingle();
       return data;
     },
   });

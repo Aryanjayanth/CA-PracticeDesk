@@ -5,12 +5,27 @@ import { toast } from "sonner";
 import { Check, Copy, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Field } from "./common";
 import { inviteUser } from "@/lib/firms.functions";
 import { errMsg } from "@/lib/format";
 
-export function InviteDialog({ firm, onClose, allowOwner = true }: { firm: { id: string; name: string } | null; onClose: () => void; allowOwner?: boolean }) {
+export function InviteDialog({
+  firm,
+  onClose,
+  allowOwner = true,
+}: {
+  firm: { id: string; name: string } | null;
+  onClose: () => void;
+  allowOwner?: boolean;
+}) {
   const qc = useQueryClient();
   const run = useServerFn(inviteUser);
   const [email, setEmail] = useState("");
@@ -42,7 +57,15 @@ export function InviteDialog({ firm, onClose, allowOwner = true }: { firm: { id:
     if (!firm) return;
     setBusy(true);
     try {
-      const r = await run({ data: { firmId: firm.id, email, fullName: name, role, redirectTo: `${window.location.origin}/set-password` } });
+      const r = await run({
+        data: {
+          firmId: firm.id,
+          email,
+          fullName: name,
+          role,
+          redirectTo: `${window.location.origin}/set-password`,
+        },
+      });
       qc.invalidateQueries();
       if (r.status === "invited") {
         if (r.inviteLink) {
@@ -75,7 +98,8 @@ export function InviteDialog({ firm, onClose, allowOwner = true }: { firm: { id:
               </div>
               <DialogTitle className="text-center">Invitation Dispatched!</DialogTitle>
               <DialogDescription className="text-center">
-                An invitation email has been sent to <span className="font-semibold text-foreground">{invitedEmail}</span>.
+                An invitation email has been sent to{" "}
+                <span className="font-semibold text-foreground">{invitedEmail}</span>.
               </DialogDescription>
             </DialogHeader>
 
@@ -84,16 +108,26 @@ export function InviteDialog({ firm, onClose, allowOwner = true }: { firm: { id:
                 You can also copy and share the direct activation link below via WhatsApp or chat:
               </div>
               <div className="flex items-center gap-2">
-                <Input value={createdLink} readOnly className="font-mono text-xs select-all bg-muted/50" />
+                <Input
+                  value={createdLink}
+                  readOnly
+                  className="font-mono text-xs select-all bg-muted/50"
+                />
                 <Button type="button" size="sm" onClick={copyLink} className="shrink-0 gap-1.5">
-                  {copied ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
+                  {copied ? (
+                    <Check className="h-4 w-4 text-emerald-500" />
+                  ) : (
+                    <Copy className="h-4 w-4" />
+                  )}
                   {copied ? "Copied" : "Copy"}
                 </Button>
               </div>
             </div>
 
             <DialogFooter className="mt-4">
-              <Button onClick={resetAll} className="w-full">Done</Button>
+              <Button onClick={resetAll} className="w-full">
+                Done
+              </Button>
             </DialogFooter>
           </>
         ) : (
@@ -106,10 +140,19 @@ export function InviteDialog({ firm, onClose, allowOwner = true }: { firm: { id:
             </DialogHeader>
             <div className="space-y-4">
               <Field label="Full name">
-                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Rahul Sharma" />
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Rahul Sharma"
+                />
               </Field>
               <Field label="Email *">
-                <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="rahul@example.com" />
+                <Input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="rahul@example.com"
+                />
               </Field>
               <Field label="Role">
                 <select
@@ -117,7 +160,10 @@ export function InviteDialog({ firm, onClose, allowOwner = true }: { firm: { id:
                   onChange={(e) => setRole(e.target.value as typeof role)}
                   className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
                 >
-                  {(allowOwner ? ["owner", "admin", "accountant", "staff", "cashier"] : ["admin", "accountant", "staff", "cashier"]).map((r) => (
+                  {(allowOwner
+                    ? ["owner", "admin", "accountant", "staff", "cashier"]
+                    : ["admin", "accountant", "staff", "cashier"]
+                  ).map((r) => (
                     <option key={r} value={r}>
                       {r[0].toUpperCase() + r.slice(1)}
                     </option>
@@ -126,8 +172,12 @@ export function InviteDialog({ firm, onClose, allowOwner = true }: { firm: { id:
               </Field>
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={resetAll}>Cancel</Button>
-              <Button onClick={send} disabled={busy || !email}>{busy ? "Sending…" : "Send Invite"}</Button>
+              <Button variant="outline" onClick={resetAll}>
+                Cancel
+              </Button>
+              <Button onClick={send} disabled={busy || !email}>
+                {busy ? "Sending…" : "Send Invite"}
+              </Button>
             </DialogFooter>
           </>
         )}

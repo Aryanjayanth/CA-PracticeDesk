@@ -35,30 +35,49 @@ export const label = (s: string | null | undefined) =>
   (s ?? "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 export const MODES: Record<string, string> = {
-  cash: "Cash", bank: "Bank Transfer", upi: "UPI", cheque: "Cheque", card: "Card", other: "Other",
+  cash: "Cash",
+  bank: "Bank Transfer",
+  upi: "UPI",
+  cheque: "Cheque",
+  card: "Card",
+  other: "Other",
 };
 export const FREQS: Record<string, string> = {
-  one_time: "One Time", monthly: "Monthly", quarterly: "Quarterly", half_yearly: "Half-Yearly", yearly: "Yearly",
+  one_time: "One Time",
+  monthly: "Monthly",
+  quarterly: "Quarterly",
+  half_yearly: "Half-Yearly",
+  yearly: "Yearly",
 };
 export const JOB_STATUSES = ["pending", "in_progress", "completed", "on_hold", "cancelled"];
 
 export type InvoiceLike = { status: string; due_date: string; outstanding: number | null };
 export const invoiceDisplayStatus = (i: InvoiceLike) =>
-  (i.status === "unpaid" || i.status === "partially_paid") && Number(i.outstanding) > 0 && i.due_date < today()
-    ? "overdue" : i.status;
+  (i.status === "unpaid" || i.status === "partially_paid") &&
+  Number(i.outstanding) > 0 &&
+  i.due_date < today()
+    ? "overdue"
+    : i.status;
 
 export type JobLike = { status: string; due_date: string | null };
 export const jobDisplayStatus = (j: JobLike) =>
-  j.due_date && j.due_date < today() && !["completed", "cancelled"].includes(j.status) ? "overdue" : j.status;
+  j.due_date && j.due_date < today() && !["completed", "cancelled"].includes(j.status)
+    ? "overdue"
+    : j.status;
 
 export const errMsg = (e: unknown) =>
-  e && typeof e === "object" && "message" in e ? String((e as { message: string }).message) : "Something went wrong";
+  e && typeof e === "object" && "message" in e
+    ? String((e as { message: string }).message)
+    : "Something went wrong";
 
 export function downloadCsv(filename: string, rows: Record<string, unknown>[]) {
   if (!rows.length) return;
   const headers = Object.keys(rows[0]);
   const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const csv = [headers.map(esc).join(","), ...rows.map((r) => headers.map((h) => esc(r[h])).join(","))].join("\n");
+  const csv = [
+    headers.map(esc).join(","),
+    ...rows.map((r) => headers.map((h) => esc(r[h])).join(",")),
+  ].join("\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
   a.download = filename;

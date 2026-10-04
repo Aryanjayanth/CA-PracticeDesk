@@ -12,26 +12,31 @@ It features native Indian compliance workflows including Indian currency formatt
 ## Key Features
 
 ### 🏢 Multi-Tenant Firm Isolation
+
 - Hard data isolation between accounting firms enforced by PostgreSQL Row Level Security (RLS).
 - Firm switcher with Super Admin platform mode for managing multiple firms securely.
 - Role-based invitations and team member onboarding.
 
 ### 👥 Client & Service Retainer Management
+
 - Full Client 360 directory with PAN, TAN, GSTIN, business type, contact details, and assigned staff.
 - Service master catalog with standard SAC codes (e.g. `998221`, `998222`), default fees, and due date rules.
 - Retainer schedules (`client_services`) supporting Monthly, Quarterly, Half-Yearly, and Yearly recurring compliance.
 
 ### ⚡ Automated Recurring Jobs & Auto-Invoicing
+
 - **Automated Job Generation**: Daily `pg_cron` generation and 1-click manual generation of periodic compliance work (GSTR-3B, GSTR-1, TDS, Audits) with zero duplicates.
 - **Auto-Invoicing on Completion**: Optional toggle per service, client retainer, or individual job to automatically raise an invoice the moment work is marked `Completed`.
 - **Linked Job-Billing Bridge**: Direct 1-click navigation between operational jobs and legal invoices. Click any billing status badge to view or raise its associated invoice.
 
 ### 📋 Operations & Work Management
+
 - Granular job lifecycles (`Pending` → `In Progress` → `Completed` / `On Hold` / `Cancelled`) with logged change reasons and audit trails.
 - Overdue tracking dynamically calculated from statutory deadlines without cron dependencies.
 - Staff assignment and workload filtering.
 
 ### 💰 Invoicing, Billing & Payments
+
 - Professional GST invoices with automated CGST/SGST/IGST breakdown, SAC codes, and discounts with reason tracking.
 - Printable tax invoice PDF preview and download.
 - Payment allocation engine supporting cash, bank, UPI, NEFT/RTGS, and cheques.
@@ -39,6 +44,7 @@ It features native Indian compliance workflows including Indian currency formatt
 - Strict financial immutability: zero permanent deletes; all adjustments use reversal/cancellation RPCs.
 
 ### 📊 Receivables & Bank Reconciliation
+
 - Accounts receivable ageing analysis categorized by standard buckets (Current, 1–30, 31–60, 61–90, 90+ days).
 - CSV bank statement parser with automated UTR/cheque reference matching and date/amount tolerance checking.
 
