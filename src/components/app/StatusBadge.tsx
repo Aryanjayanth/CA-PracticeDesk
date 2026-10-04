@@ -10,16 +10,46 @@ const tone: Record<string, string> = {
 };
 
 const map: Record<string, keyof typeof tone> = {
-  active: "success", completed: "success", paid: "success", allocated: "success", reconciled: "success", closed: "success",
-  pending: "warning", partially_paid: "warning", partially_allocated: "warning", unallocated: "warning", on_hold: "warning", paused: "warning", unmatched: "warning", invoiced: "info",
-  in_progress: "info", unpaid: "info", open: "muted", draft: "muted",
-  overdue: "danger", cancelled: "danger", reversed: "danger", suspended: "danger", stopped: "danger",
-  inactive: "muted", ignored: "muted",
+  active: "success",
+  completed: "success",
+  paid: "success",
+  allocated: "success",
+  reconciled: "success",
+  closed: "success",
+  pending: "warning",
+  partially_paid: "warning",
+  partially_allocated: "warning",
+  unallocated: "warning",
+  on_hold: "warning",
+  paused: "warning",
+  unmatched: "warning",
+  invoiced: "info",
+  in_progress: "info",
+  unpaid: "info",
+  open: "muted",
+  draft: "muted",
+  overdue: "danger",
+  cancelled: "danger",
+  reversed: "danger",
+  suspended: "danger",
+  stopped: "danger",
+  inactive: "muted",
+  ignored: "muted",
+  // Import review states
+  new: "success",
+  duplicate: "warning",
+  invalid: "danger",
 };
 
 export function StatusBadge({ status, className }: { status: string; className?: string }) {
   return (
-    <span className={cn("inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium whitespace-nowrap", tone[map[status] ?? "muted"], className)}>
+    <span
+      className={cn(
+        "inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium whitespace-nowrap",
+        tone[map[status] ?? "muted"],
+        className,
+      )}
+    >
       {label(status)}
     </span>
   );

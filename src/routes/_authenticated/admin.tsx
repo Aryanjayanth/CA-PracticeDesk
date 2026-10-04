@@ -72,7 +72,7 @@ function AdminPage() {
   if (!isSuperAdmin) return <NoAccess />;
 
   const firms = (q.data ?? []).filter((f) =>
-    `${f.name} ${f.owner_email} ${f.city}`.toLowerCase().includes(term.toLowerCase())
+    `${f.name} ${f.owner_email} ${f.city}`.toLowerCase().includes(term.toLowerCase()),
   );
   const all = q.data ?? [];
 
@@ -99,9 +99,7 @@ function AdminPage() {
     setDeleting(true);
     try {
       // Try direct RPC first
-      const { error: rpcErr } = await (supabase.rpc as any)("delete_firm", {
-        _firm_id: deleteTarget.id,
-      });
+      const { error: rpcErr } = await supabase.rpc("delete_firm", { _firm_id: deleteTarget.id });
 
       if (!rpcErr) {
         toast.success(`Firm "${deleteTarget.name}" deleted successfully`);
@@ -201,9 +199,7 @@ function AdminPage() {
                     className="h-11 w-11 text-base shrink-0"
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="truncate font-semibold text-base leading-snug">
-                      {f.name}
-                    </div>
+                    <div className="truncate font-semibold text-base leading-snug">{f.name}</div>
                     <div className="mt-0.5 text-xs text-muted-foreground">
                       Since {fmtDate(f.created_at)}
                     </div>
@@ -327,24 +323,15 @@ function AdminPage() {
             <DialogTitle>Delete Firm</DialogTitle>
             <DialogDescription>
               Are you sure you want to permanently delete{" "}
-              <strong className="text-foreground">{deleteTarget?.name}</strong>?
-              This will remove all associated clients, services, jobs, and invoices.
-              This action cannot be undone.
+              <strong className="text-foreground">{deleteTarget?.name}</strong>? This will remove
+              all associated clients, services, jobs, and invoices. This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button
-              variant="outline"
-              onClick={() => setDeleteTarget(null)}
-              disabled={deleting}
-            >
+            <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>
               Cancel
             </Button>
-            <Button
-              variant="destructive"
-              onClick={confirmDelete}
-              disabled={deleting}
-            >
+            <Button variant="destructive" onClick={confirmDelete} disabled={deleting}>
               {deleting ? "Deleting…" : "Permanently Delete Firm"}
             </Button>
           </DialogFooter>
@@ -386,7 +373,7 @@ function NewFirmDialog({
       toast.success(
         r.status === "invited"
           ? `Firm created — invite sent to ${f.ownerEmail}`
-          : "Firm created and existing account linked"
+          : "Firm created and existing account linked",
       );
       qc.invalidateQueries({ queryKey: ["firm-overview"] });
       setF({ name: "", ownerName: "", ownerEmail: "", phone: "", city: "" });
@@ -436,11 +423,7 @@ function NewFirmDialog({
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Phone">
-              <Input
-                value={f.phone}
-                onChange={set("phone")}
-                placeholder="+91 98765 43210"
-              />
+              <Input value={f.phone} onChange={set("phone")} placeholder="+91 98765 43210" />
             </Field>
             <Field label="City">
               <Input value={f.city} onChange={set("city")} placeholder="e.g. Mumbai" />

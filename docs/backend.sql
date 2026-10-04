@@ -53,8 +53,10 @@ create table public.clients (
   client_code text not null unique default ('CL' || lpad(nextval('public.client_seq')::text,4,'0')),
   name text not null,
   client_type text not null default 'Company',
-  mobile text, email text, address text, pan text, tan text, gstin text,
-  gst_type text, business_type text, industry text, financial_year text default '2026-27',
+  mobile text not null, email text, address text not null, pan text, tan text, gstin text,
+  secondary_phone text,
+  contact_person_name text, contact_person_phone text, contact_person_role text,
+  gst_type text, business_type text, industry text,
   assigned_staff uuid references public.profiles(id),
   status text not null default 'active' check (status in ('active','inactive','suspended')),
   notes text, is_demo boolean not null default false,
@@ -62,6 +64,29 @@ create table public.clients (
   created_at timestamptz not null default now(), updated_at timestamptz not null default now()
 );
 create index on public.clients(name); create index on public.clients(assigned_staff);
+create index on public.clients(client_type); create index on public.clients(industry);
+create index on public.clients(gst_type); create index on public.clients(contact_person_name);
+create index on public.clients(secondary_phone);
+
+-- Mandatory client fields — enforced in the DB so the rule holds regardless of client
+create or replace function public.validate_client_required() returns trigger
+language plpgsql security definer set search_path=public as $$
+declare
+  v_missing text;
+begin
+  v_missing := concat_ws(', ',
+    case when btrim(coalesce(new.name, '')) = ''        then 'Client Name' end,
+    case when btrim(coalesce(new.client_type, '')) = ''  then 'Client Type' end,
+    case when btrim(coalesce(new.address, '')) = ''      then 'Address' end,
+    case when btrim(coalesce(new.mobile, '')) = ''       then 'Phone Number' end
+  );
+  if v_missing <> '' then
+    raise exception 'Missing required field(s): %', v_missing using errcode = '23502';
+  end if;
+  return new;
+end $$;
+create trigger clients_validate_required before insert or update on public.clients
+  for each row execute function public.validate_client_required();
 
 create table public.services (
   id uuid primary key default gen_random_uuid(),
@@ -501,10 +526,10 @@ insert into public.services(name, service_type, description, frequency, billing_
  ('Payroll','Payroll','Monthly payroll processing','monthly','recurring',3500,7),
  ('Audit','Audit','Statutory audit','one_time','one_time',50000,60);
 
-insert into public.clients(name, client_type, mobile, email, address, pan, gstin, gst_type, business_type, industry, is_demo, notes) values
- ('ABC Pvt Ltd','Company','9876543210','accounts@abc.example','Koramangala, Bengaluru','AABCA1234F','29AABCA1234F1Z5','Regular','Private Limited','Manufacturing',true,'DEMO client'),
- ('XYZ Traders','Proprietorship','9123456780','xyz@traders.example','Chickpet, Bengaluru','ABCPX5678K','29ABCPX5678K1Z2','Regular','Proprietorship','Trading',true,'DEMO client'),
- ('LMN Industries','Partnership','9988776655','info@lmn.example','Peenya, Bengaluru','AAFFL9012M','29AAFFL9012M1Z8','Composition','Partnership','Engineering',true,'DEMO client');
+insert into public.clients(name, client_type, mobile, secondary_phone, email, address, pan, gstin, gst_type, business_type, industry, contact_person_name, contact_person_phone, contact_person_role, is_demo, notes) values
+ ('ABC Pvt Ltd','Company','9876543210','9876543212','accounts@abc.example','Koramangala, Bengaluru','AABCA1234F','29AABCA1234F1Z5','Regular','Private Limited','Manufacturing','Ravi Menon','9876543211','Owner',true,'DEMO client'),
+ ('XYZ Traders','Proprietorship','9123456780',null,'xyz@traders.example','Chickpet, Bengaluru','ABCPX5678K','29ABCPX5678K1Z2','Regular','Proprietorship','Trading','Suresh Kumar','9123456781','Owner',true,'DEMO client'),
+ ('LMN Industries','Partnership','9988776655',null,'info@lmn.example','Peenya, Bengaluru','AAFFL9012M','29AAFFL9012M1Z8','Composition','Partnership','Engineering','Anita Rao','9988776656','Partner',true,'DEMO client');
 
 do $$
 declare abc uuid; xyz uuid; lmn uuid; gst uuid; tds uuid; itr uuid; acc uuid; aud uuid;

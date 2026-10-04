@@ -21,6 +21,7 @@ import {
   TriangleAlert,
   Building2,
   ChevronDown,
+  ArrowLeftRight,
 } from "lucide-react";
 import {
   Sidebar,
@@ -83,6 +84,7 @@ const groups: { label: string; items: Item[]; open?: boolean }[] = [
       { title: "Users", url: "/users", icon: UserCog, roles: M },
       { title: "Roles & Permissions", url: "/roles", icon: ShieldCheck, roles: M },
       { title: "Audit Trail", url: "/audit", icon: History, roles: M },
+      { title: "Import / Export", url: "/import-export", icon: ArrowLeftRight, roles: M },
       { title: "Settings", url: "/settings", icon: Settings, roles: M },
     ],
   },
@@ -99,8 +101,8 @@ export function AppSidebar() {
   const isActive = (u: string) => path === u || path.startsWith(u + "/");
   const [open, setOpen] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(
-      groups.map((g) => [g.label, !!g.open || g.items.some((i) => isActive(i.url))])
-    )
+      groups.map((g) => [g.label, !!g.open || g.items.some((i) => isActive(i.url))]),
+    ),
   );
 
   const isPlatformMode = isSuperAdmin && privacyMode;
@@ -113,16 +115,12 @@ export function AppSidebar() {
           className="flex items-center gap-2.5 rounded-md p-1 transition-colors hover:bg-sidebar-accent/50 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0"
         >
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md">
-            <img
-              src="/logo.png"
-              alt="CA PracticeDesk"
-              className="h-6 w-6 object-contain"
-            />
+            <img src="/logo.png" alt="CA PracticeDesk" className="h-6 w-6 object-contain" />
           </div>
           {!collapsed && (
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-semibold leading-tight text-sidebar-foreground">
-                {isPlatformMode ? "CA PracticeDesk" : firm?.name ?? "CA PracticeDesk"}
+                {isPlatformMode ? "CA PracticeDesk" : (firm?.name ?? "CA PracticeDesk")}
               </div>
               <div className="text-[11px] leading-tight text-muted-foreground opacity-75">
                 {isPlatformMode ? "Super Admin" : "PracticeDesk"}
@@ -178,10 +176,7 @@ export function AppSidebar() {
                   >
                     {g.label}
                     <ChevronDown
-                      className={cn(
-                        "h-3.5 w-3.5 transition-transform",
-                        !isOpen && "-rotate-90"
-                      )}
+                      className={cn("h-3.5 w-3.5 transition-transform", !isOpen && "-rotate-90")}
                     />
                   </button>
                 </SidebarGroupLabel>

@@ -21,4 +21,9 @@ export default defineConfig(({ command }) => ({
         ]
       : []),
   ],
+  server: {
+    // `npm run build` writes here while `npm run dev` is running. Watching those
+    // thousands of output files exhausts memory (ENOMEM on Windows).
+    watch: { ignored: ["**/.output/**", "**/.wrangler/**", "**/.git/**"] },
+  },
 }));
