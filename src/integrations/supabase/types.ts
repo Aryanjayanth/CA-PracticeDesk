@@ -493,8 +493,10 @@ export type Database = {
           invoice_date: string;
           invoice_no: string;
           is_demo: boolean;
+          job_id: string | null;
           notes: string | null;
           outstanding: number | null;
+          payment_id: string | null;
           status: string;
           subtotal: number;
           tax_amount: number;
@@ -515,8 +517,10 @@ export type Database = {
           invoice_date?: string;
           invoice_no?: string;
           is_demo?: boolean;
+          job_id?: string | null;
           notes?: string | null;
           outstanding?: number | null;
+          payment_id?: string | null;
           status?: string;
           subtotal?: number;
           tax_amount?: number;
@@ -537,8 +541,10 @@ export type Database = {
           invoice_date?: string;
           invoice_no?: string;
           is_demo?: boolean;
+          job_id?: string | null;
           notes?: string | null;
           outstanding?: number | null;
+          payment_id?: string | null;
           status?: string;
           subtotal?: number;
           tax_amount?: number;
@@ -555,6 +561,221 @@ export type Database = {
           },
           {
             foreignKeyName: "invoices_firm_id_fkey";
+            columns: ["firm_id"];
+            isOneToOne: false;
+            referencedRelation: "firms";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "invoices_job_id_fkey";
+            columns: ["job_id"];
+            isOneToOne: false;
+            referencedRelation: "jobs";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "invoices_payment_id_fkey";
+            columns: ["payment_id"];
+            isOneToOne: false;
+            referencedRelation: "payments";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      expenses: {
+        Row: {
+          amount: number;
+          category: string;
+          client_id: string | null;
+          created_at: string;
+          created_by: string | null;
+          description: string;
+          expense_date: string;
+          firm_id: string;
+          id: string;
+          job_id: string | null;
+          mode: string;
+          notes: string | null;
+          paid_to: string | null;
+          reference: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          amount: number;
+          category?: string;
+          client_id?: string | null;
+          created_at?: string;
+          created_by?: string | null;
+          description: string;
+          expense_date?: string;
+          firm_id?: string;
+          id?: string;
+          job_id?: string | null;
+          mode?: string;
+          notes?: string | null;
+          paid_to?: string | null;
+          reference?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          amount?: number;
+          category?: string;
+          client_id?: string | null;
+          created_at?: string;
+          created_by?: string | null;
+          description?: string;
+          expense_date?: string;
+          firm_id?: string;
+          id?: string;
+          job_id?: string | null;
+          mode?: string;
+          notes?: string | null;
+          paid_to?: string | null;
+          reference?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "expenses_client_id_fkey";
+            columns: ["client_id"];
+            isOneToOne: false;
+            referencedRelation: "clients";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "expenses_firm_id_fkey";
+            columns: ["firm_id"];
+            isOneToOne: false;
+            referencedRelation: "firms";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "expenses_job_id_fkey";
+            columns: ["job_id"];
+            isOneToOne: false;
+            referencedRelation: "jobs";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      job_clearing: {
+        Row: {
+          advance: number;
+          cleared_at: string | null;
+          cleared_by: string | null;
+          created_at: string;
+          discount: number;
+          final_amount: number;
+          firm_id: string;
+          gross_fee: number;
+          id: string;
+          job_id: string;
+          notes: string | null;
+          other_addition: number;
+          other_deduction: number;
+          squared_off_at: string | null;
+          squared_off_by: string | null;
+          status: string;
+          tds_tcs: number;
+          updated_at: string;
+        };
+        Insert: {
+          advance?: number;
+          cleared_at?: string | null;
+          cleared_by?: string | null;
+          created_at?: string;
+          discount?: number;
+          final_amount?: number;
+          firm_id?: string;
+          gross_fee?: number;
+          id?: string;
+          job_id: string;
+          notes?: string | null;
+          other_addition?: number;
+          other_deduction?: number;
+          squared_off_at?: string | null;
+          squared_off_by?: string | null;
+          status?: string;
+          tds_tcs?: number;
+          updated_at?: string;
+        };
+        Update: {
+          advance?: number;
+          cleared_at?: string | null;
+          cleared_by?: string | null;
+          created_at?: string;
+          discount?: number;
+          final_amount?: number;
+          firm_id?: string;
+          gross_fee?: number;
+          id?: string;
+          job_id?: string;
+          notes?: string | null;
+          other_addition?: number;
+          other_deduction?: number;
+          squared_off_at?: string | null;
+          squared_off_by?: string | null;
+          status?: string;
+          tds_tcs?: number;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "job_clearing_job_id_fkey";
+            columns: ["job_id"];
+            isOneToOne: true;
+            referencedRelation: "jobs";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "job_clearing_firm_id_fkey";
+            columns: ["firm_id"];
+            isOneToOne: false;
+            referencedRelation: "firms";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      job_conditions: {
+        Row: {
+          code: string;
+          created_at: string;
+          description: string | null;
+          enabled: boolean;
+          firm_id: string;
+          id: string;
+          label: string;
+          severity: string;
+          sort_order: number;
+          updated_at: string;
+        };
+        Insert: {
+          code: string;
+          created_at?: string;
+          description?: string | null;
+          enabled?: boolean;
+          firm_id?: string;
+          id?: string;
+          label: string;
+          severity?: string;
+          sort_order?: number;
+          updated_at?: string;
+        };
+        Update: {
+          code?: string;
+          created_at?: string;
+          description?: string | null;
+          enabled?: boolean;
+          firm_id?: string;
+          id?: string;
+          label?: string;
+          severity?: string;
+          sort_order?: number;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "job_conditions_firm_id_fkey";
             columns: ["firm_id"];
             isOneToOne: false;
             referencedRelation: "firms";
@@ -614,8 +835,10 @@ export type Database = {
         Row: {
           assigned_staff: string | null;
           auto_invoice: boolean;
+          checklist: Json;
           client_id: string;
           client_service_id: string | null;
+          completed_at: string | null;
           created_at: string;
           created_by: string | null;
           discount: number;
@@ -636,8 +859,10 @@ export type Database = {
         Insert: {
           assigned_staff?: string | null;
           auto_invoice?: boolean;
+          checklist?: Json;
           client_id: string;
           client_service_id?: string | null;
+          completed_at?: string | null;
           created_at?: string;
           created_by?: string | null;
           discount?: number;
@@ -658,8 +883,10 @@ export type Database = {
         Update: {
           assigned_staff?: string | null;
           auto_invoice?: boolean;
+          checklist?: Json;
           client_id?: string;
           client_service_id?: string | null;
+          completed_at?: string | null;
           created_at?: string;
           created_by?: string | null;
           discount?: number;
@@ -828,7 +1055,7 @@ export type Database = {
           firm_id: string;
           id: string;
           is_demo: boolean;
-          job_id: string | null;
+          job_id: string;
           mode: string;
           narration: string | null;
           payment_code: string;
@@ -846,7 +1073,7 @@ export type Database = {
           firm_id?: string;
           id?: string;
           is_demo?: boolean;
-          job_id?: string | null;
+          job_id: string;
           mode: string;
           narration?: string | null;
           payment_code?: string;
@@ -1010,6 +1237,85 @@ export type Database = {
           },
         ];
       };
+      recurring_payments: {
+        Row: {
+          amount: number;
+          client_id: string;
+          created_at: string;
+          created_by: string | null;
+          firm_id: string;
+          frequency: string;
+          id: string;
+          job_id: string | null;
+          label: string;
+          last_run_at: string | null;
+          mode: string;
+          next_run_date: string;
+          notes: string | null;
+          reference: string | null;
+          status: string;
+          updated_at: string;
+        };
+        Insert: {
+          amount: number;
+          client_id: string;
+          created_at?: string;
+          created_by?: string | null;
+          firm_id?: string;
+          frequency: string;
+          id?: string;
+          job_id?: string | null;
+          label: string;
+          last_run_at?: string | null;
+          mode?: string;
+          next_run_date?: string;
+          notes?: string | null;
+          reference?: string | null;
+          status?: string;
+          updated_at?: string;
+        };
+        Update: {
+          amount?: number;
+          client_id?: string;
+          created_at?: string;
+          created_by?: string | null;
+          firm_id?: string;
+          frequency?: string;
+          id?: string;
+          job_id?: string | null;
+          label?: string;
+          last_run_at?: string | null;
+          mode?: string;
+          next_run_date?: string;
+          notes?: string | null;
+          reference?: string | null;
+          status?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "recurring_payments_client_id_fkey";
+            columns: ["client_id"];
+            isOneToOne: false;
+            referencedRelation: "clients";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "recurring_payments_firm_id_fkey";
+            columns: ["firm_id"];
+            isOneToOne: false;
+            referencedRelation: "firms";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "recurring_payments_job_id_fkey";
+            columns: ["job_id"];
+            isOneToOne: false;
+            referencedRelation: "jobs";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       settings: {
         Row: {
           address: string | null;
@@ -1132,7 +1438,44 @@ export type Database = {
         };
         Returns: string;
       };
-      auto_invoice_job: { Args: { _job_id: string }; Returns: string | null };
+      create_invoice_for_job: {
+        Args: {
+          _due_date: string;
+          _extra_amount: number;
+          _extra_desc: string;
+          _invoice_date: string;
+          _job_id: string;
+          _notes: string;
+          _payment_id: string | null;
+          _tax_rate: number;
+        };
+        Returns: string;
+      };
+      job_workflow: { Args: { _job_id: string }; Returns: Json };
+      mark_job_cleared: {
+        Args: { _job_id: string; _notes: string };
+        Returns: undefined;
+      };
+      reopen_job_clearing: {
+        Args: { _job_id: string; _reason: string };
+        Returns: undefined;
+      };
+      save_job_clearing: {
+        Args: {
+          _advance: number;
+          _discount: number;
+          _job_id: string;
+          _notes: string;
+          _other_addition: number;
+          _other_deduction: number;
+          _tds_tcs: number;
+        };
+        Returns: string;
+      };
+      sq_off_job_clearing: {
+        Args: { _job_id: string; _notes: string };
+        Returns: undefined;
+      };
       delete_firm: { Args: { _firm_id: string }; Returns: undefined };
       current_firm_id: { Args: never; Returns: string };
       firm_guard: { Args: { _id: string; _tbl: string }; Returns: undefined };

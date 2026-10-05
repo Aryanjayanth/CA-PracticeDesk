@@ -23,7 +23,7 @@ export const Route = createFileRoute("/_authenticated/payments")({
 });
 
 const empty = {
-  client_id: "",
+  job_id: "",
   amount: "",
   mode: "upi",
   payment_date: today(),
@@ -36,6 +36,18 @@ function PaymentsPage() {
   const { isFinance } = useRoles();
   const qc = useQueryClient();
   const { data: clients } = useClientLookup();
+  const { data: jobs } = useQuery({
+    queryKey: ["job-lookup"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("jobs")
+        .select("id,job_code,title,client_id,status,due_date")
+        .neq("status", "cancelled")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+  });
   const [f, setF] = useState(empty);
   const [busy, setBusy] = useState(false);
   const [rev, setRev] = useState<string | null>(null);
@@ -48,7 +60,7 @@ function PaymentsPage() {
       const { data, error } = await supabase
         .from("payments")
         .select(
-          "id,payment_code,client_id,amount,mode,payment_date,reference,narration,status,created_at",
+          "id,payment_code,client_id,job_id,amount,mode,payment_date,reference,narration,status,created_at",
         )
         .order("created_at", { ascending: false });
       if (error) throw error;
@@ -56,11 +68,13 @@ function PaymentsPage() {
     },
   });
   const cname = (id: string) => clients?.find((c) => c.id === id)?.name ?? "—";
+  const jcode = (id: string | null) => jobs?.find((j) => j.id === id)?.job_code ?? "—";
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     const amt = Number(f.amount);
-    if (!f.client_id) return toast.error("Choose a client");
+    const job = jobs?.find((j) => j.id === f.job_id);
+    if (!job) return toast.error("Choose the job this payment settles");
     if (!(amt > 0)) return toast.error("Amount must be greater than zero");
     if (f.payment_date > today()) return toast.error("Payment date can't be in the future");
     if (f.mode !== "cash" && !f.reference.trim())
@@ -68,7 +82,7 @@ function PaymentsPage() {
     const dup = q.data?.find(
       (p) =>
         p.status !== "reversed" &&
-        p.client_id === f.client_id &&
+        p.job_id === job.id &&
         Number(p.amount) === amt &&
         (p.payment_date === f.payment_date || (f.reference && p.reference === f.reference)),
     );
@@ -81,7 +95,8 @@ function PaymentsPage() {
       return;
     setBusy(true);
     const { error } = await supabase.from("payments").insert({
-      client_id: f.client_id,
+      client_id: job.client_id,
+      job_id: job.id,
       amount: amt,
       mode: f.mode,
       payment_date: f.payment_date,
@@ -119,16 +134,22 @@ function PaymentsPage() {
           </CardHeader>
           <CardContent>
             <form onSubmit={save} className="space-y-3">
-              <Field label="Client *">
-                <NativeSelect value={f.client_id} onChange={set("client_id")}>
-                  <option value="">Select client…</option>
-                  {clients?.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} ({c.client_code})
+              <Field label="Job *">
+                <NativeSelect value={f.job_id} onChange={set("job_id")}>
+                  <option value="">Select job…</option>
+                  {jobs?.map((j) => (
+                    <option key={j.id} value={j.id}>
+                      {cname(j.client_id)} — {j.job_code} — {j.title}
                     </option>
                   ))}
                 </NativeSelect>
               </Field>
+              {f.job_id && (
+                <p className="text-xs text-muted-foreground">
+                  Payments are always recorded against a job. The invoice for this job unlocks only
+                  after the clearing is squared off.
+                </p>
+              )}
               <Field label="Amount (₹) *">
                 <Input
                   type="number"
@@ -178,7 +199,9 @@ function PaymentsPage() {
             rows={q.data}
             loading={q.isLoading}
             empty="No payments recorded yet."
-            search={(p) => `${p.payment_code} ${p.reference} ${cname(p.client_id)}`}
+            search={(p) =>
+              `${p.payment_code} ${p.reference} ${cname(p.client_id)} ${jcode(p.job_id)}`
+            }
             columns={[
               {
                 key: "payment_code",
@@ -187,6 +210,13 @@ function PaymentsPage() {
                 className: "font-mono text-xs",
               },
               { key: "c", header: "Client", render: (p) => cname(p.client_id) },
+              {
+                key: "j",
+                header: "Job",
+                sort: (p) => jcode(p.job_id),
+                className: "font-mono text-xs",
+                render: (p) => jcode(p.job_id),
+              },
               {
                 key: "d",
                 header: "Date",

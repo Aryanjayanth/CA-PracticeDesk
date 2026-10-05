@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ArrowLeft, ExternalLink, Receipt } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -20,6 +20,8 @@ import {
   jobDisplayStatus,
   label,
 } from "@/lib/format";
+import { clearingLabel, isWorkflow, STAGES, type WorkflowStages } from "@/lib/job-workflow";
+import type { Json } from "@/integrations/supabase/types";
 
 export const Route = createFileRoute("/_authenticated/jobs/$id")({
   head: () => ({
@@ -59,6 +61,31 @@ function JobDetail() {
       return { job: j.data, history: h.data ?? [] };
     },
   });
+  // The single source of truth for workflow position. Everything below renders
+  // from this rather than recomputing stage rules in the browser.
+  const wf = useQuery({
+    queryKey: ["job-workflow", id],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("job_workflow", { _job_id: id });
+      if (error) throw error;
+      if (!isWorkflow(data)) throw new Error("Unexpected workflow response");
+      return data;
+    },
+  });
+
+  const payQ = useQuery({
+    queryKey: ["job-payments", id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("payments")
+        .select("id,payment_code,amount,payment_date,status,mode")
+        .eq("job_id", id)
+        .order("payment_date", { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+  });
+
   const [status, setStatus] = useState("");
   const [reason, setReason] = useState("");
   const [edit, setEdit] = useState({
@@ -67,10 +94,45 @@ function JobDetail() {
     notes: "",
     fee: "",
     discount: "",
-    auto_invoice: false,
   });
+  const [checklist, setChecklist] = useState<WorkflowStages | null>(null);
   const [raising, setRaising] = useState(false);
   const job = q.data?.job;
+
+  // checklist is a jsonb array of { label, done }. Normalise defensively since
+  // it is user-editable data that predates any schema guarantee.
+  const rawItems = useMemo(() => {
+    const c = job?.checklist;
+    return Array.isArray(c) ? (c as Json[]) : [];
+  }, [job?.checklist]);
+  const items = useMemo(
+    () =>
+      rawItems.map((it) => {
+        const o = (it ?? {}) as { label?: unknown; done?: unknown };
+        return {
+          label: typeof o.label === "string" ? o.label : "",
+          done: o.done === true,
+        };
+      }),
+    [rawItems],
+  );
+  const toggleItem = async (idx: number) => {
+    const next = items.map((it, i) => (i === idx ? { ...it, done: !it.done } : it));
+    setChecklist(
+      next.reduce<WorkflowStages>(
+        (acc, it) => ({ ...acc, [it.label]: it.done }),
+        {} as WorkflowStages,
+      ),
+    );
+    const { error } = await supabase.from("jobs").update({ checklist: next }).eq("id", id);
+    if (error) {
+      toast.error(errMsg(error));
+      setChecklist(null);
+    } else {
+      qc.invalidateQueries({ queryKey: ["job", id] });
+    }
+  };
+
   useEffect(() => {
     if (job) {
       setStatus(job.status);
@@ -80,7 +142,6 @@ function JobDetail() {
         notes: job.notes ?? "",
         fee: String(job.fee),
         discount: String(job.discount),
-        auto_invoice: job.auto_invoice ?? false,
       });
     }
   }, [job]);
@@ -117,7 +178,16 @@ function JobDetail() {
 
   const raiseInvoiceNow = async () => {
     setRaising(true);
-    const { data: invId, error } = await supabase.rpc("auto_invoice_job", { _job_id: id });
+    const { data: invId, error } = await supabase.rpc("create_invoice_for_job", {
+      _job_id: id,
+      _payment_id: null,
+      _invoice_date: new Date().toISOString().slice(0, 10),
+      _due_date: job.due_date ?? new Date().toISOString().slice(0, 10),
+      _tax_rate: 0,
+      _notes: "",
+      _extra_desc: "",
+      _extra_amount: 0,
+    });
     setRaising(false);
     if (error) return toast.error(errMsg(error));
     toast.success("Invoice generated successfully!", {
@@ -148,7 +218,6 @@ function JobDetail() {
         notes: edit.notes || null,
         fee,
         discount: disc,
-        auto_invoice: edit.auto_invoice,
       })
       .eq("id", id);
     if (error) return toast.error(errMsg(error));
@@ -206,14 +275,7 @@ function JobDetail() {
                     <ExternalLink className="h-3 w-3 text-muted-foreground group-hover:text-primary" />
                   </Link>
                 ) : (
-                  <div className="inline-flex items-center gap-1.5">
-                    <StatusBadge status={job.financial_status} />
-                    {job.auto_invoice && (
-                      <span className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-600 dark:text-sky-400">
-                        Auto-Invoice ON
-                      </span>
-                    )}
-                  </div>
+                  <StatusBadge status={job.financial_status} />
                 )}
               </div>
               <h1 className="mt-1 text-2xl font-semibold">{job.title}</h1>
@@ -253,21 +315,71 @@ function JobDetail() {
                 </div>
               )}
 
-              {!inv && job.financial_status === "open" && isFinance && (
+              {!inv && wf.data && (
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/20 p-3">
                   <div className="space-y-0.5">
                     <div className="text-xs font-medium text-muted-foreground">
-                      {job.auto_invoice
-                        ? "⚡ Auto-invoicing is enabled for this job. Marking it completed will instantly generate an invoice."
-                        : "This job is currently unbilled."}
+                      {wf.data.invoice_available
+                        ? "Payment is squared off. This job is ready to invoice."
+                        : (wf.data.blocked_reason ?? "This job is not ready to invoice yet.")}
                     </div>
                   </div>
-                  {job.status === "completed" && (
+                  {wf.data.invoice_available && isFinance ? (
                     <Button size="sm" onClick={raiseInvoiceNow} disabled={raising}>
                       <Receipt className="mr-1.5 h-4 w-4" />
-                      {raising ? "Raising..." : "Generate Invoice Now"}
+                      {raising ? "Raising..." : "Create Invoice"}
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        navigate({
+                          to: "/clearing/$jobId",
+                          params: { jobId: id },
+                          search: { payment: undefined },
+                        })
+                      }
+                    >
+                      Go to payment clearing
                     </Button>
                   )}
+                </div>
+              )}
+
+              {wf.data && (
+                <div className="mt-4 rounded-lg border border-border/60 p-3">
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Workflow
+                  </div>
+                  <ol className="grid gap-1.5 sm:grid-cols-3 lg:grid-cols-6">
+                    {STAGES.map((s, i) => {
+                      const done = wf.data!.stages[s.key];
+                      const stamp = s.stamp?.(wf.data!);
+                      return (
+                        <li
+                          key={s.key}
+                          className={`rounded-md border px-2 py-1.5 text-[11px] ${
+                            done
+                              ? "border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
+                              : "bg-muted/40 text-muted-foreground"
+                          }`}
+                        >
+                          <div className="flex items-center gap-1 font-medium">
+                            <span
+                              className={`inline-flex h-3.5 w-3.5 items-center justify-center rounded-full text-[9px] ${
+                                done ? "bg-emerald-600 text-white" : "bg-muted-foreground/30"
+                              }`}
+                            >
+                              {done ? "✓" : i + 1}
+                            </span>
+                            {s.label}
+                          </div>
+                          {stamp && <div className="mt-0.5 opacity-70">{fmtDate(stamp)}</div>}
+                        </li>
+                      );
+                    })}
+                  </ol>
                 </div>
               )}
 
@@ -349,21 +461,6 @@ function JobDetail() {
                     ))}
                   </NativeSelect>
                 </Field>
-                <div className="sm:col-span-2 flex items-center gap-2 rounded-md border p-2.5 bg-muted/20">
-                  <input
-                    type="checkbox"
-                    id="edit_job_auto_invoice"
-                    checked={edit.auto_invoice}
-                    onChange={(e) => setEdit({ ...edit, auto_invoice: e.target.checked })}
-                    className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-                  />
-                  <label
-                    htmlFor="edit_job_auto_invoice"
-                    className="text-xs font-medium cursor-pointer"
-                  >
-                    Automatically raise invoice when this job is marked Completed
-                  </label>
-                </div>
                 <Field label="Notes" className="sm:col-span-2">
                   <Textarea
                     rows={2}
@@ -379,6 +476,109 @@ function JobDetail() {
           )}
         </div>
         <div className="space-y-4">
+          <Card className="shadow-none">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Checklist</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {items.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No checklist on this job.</p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {items.map((it, i) => (
+                    <li key={`${it.label}-${i}`}>
+                      <label className="flex cursor-pointer items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={it.done}
+                          onChange={() => toggleItem(i)}
+                          className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                        />
+                        <span className={it.done ? "line-through opacity-60" : ""}>{it.label}</span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="mt-2 text-xs text-muted-foreground">
+                {items.filter((i) => i.done).length} of {items.length} complete
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-none">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Related Records</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Job</span>
+                <span className="font-mono">{job.job_code}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Payment</span>
+                {payQ.data?.length ? (
+                  <Link
+                    to="/payments"
+                    className="font-mono text-primary underline underline-offset-2"
+                  >
+                    {payQ.data[0].payment_code}
+                    {payQ.data.length > 1 ? ` +${payQ.data.length - 1} more` : ""}
+                  </Link>
+                ) : (
+                  <span className="text-muted-foreground">Not Created</span>
+                )}
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Invoice</span>
+                {inv ? (
+                  <Link
+                    to="/invoices/$id"
+                    params={{ id: inv.id }}
+                    className="font-mono text-primary underline underline-offset-2"
+                  >
+                    {inv.invoice_no}
+                  </Link>
+                ) : (
+                  <span className="text-muted-foreground">Not Yet Created</span>
+                )}
+              </div>
+              {wf.data && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Clearing</span>
+                    <span>{clearingLabel(wf.data.clearing_status)}</span>
+                  </div>
+                  {Number(wf.data.final_amount) > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">Final amount</span>
+                      <span className="font-mono">{inr(wf.data.final_amount)}</span>
+                    </div>
+                  )}
+                  {wf.data.overdue && (
+                    <div className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs font-medium text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                      Payment overdue
+                    </div>
+                  )}
+                </>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full"
+                onClick={() =>
+                  navigate({
+                    to: "/clearing/$jobId",
+                    params: { jobId: id },
+                    search: { payment: undefined },
+                  })
+                }
+              >
+                Payment clearing
+              </Button>
+            </CardContent>
+          </Card>
+
           <Card className="shadow-none">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">Update Status</CardTitle>

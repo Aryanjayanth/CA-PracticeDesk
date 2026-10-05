@@ -30,10 +30,12 @@ import { Route as AuthenticatedServicesRouteImport } from './routes/_authenticat
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
 import { Route as AuthenticatedUnallocatedRouteImport } from './routes/_authenticated/unallocated'
 import { Route as AuthenticatedUsersRouteImport } from './routes/_authenticated/users'
+import { Route as AuthenticatedClearingJobIdRouteImport } from './routes/_authenticated/clearing.$jobId'
 import { Route as AuthenticatedClientsIndexRouteImport } from './routes/_authenticated/clients.index'
 import { Route as AuthenticatedClientsIdRouteImport } from './routes/_authenticated/clients.$id'
 import { Route as AuthenticatedInvoicesIndexRouteImport } from './routes/_authenticated/invoices.index'
 import { Route as AuthenticatedInvoicesIdRouteImport } from './routes/_authenticated/invoices.$id'
+import { Route as AuthenticatedInvoicesNewRouteImport } from './routes/_authenticated/invoices.new'
 import { Route as AuthenticatedJobsIndexRouteImport } from './routes/_authenticated/jobs.index'
 import { Route as AuthenticatedJobsIdRouteImport } from './routes/_authenticated/jobs.$id'
 
@@ -145,6 +147,12 @@ const AuthenticatedUsersRoute = AuthenticatedUsersRouteImport.update({
   path: '/users',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedClearingJobIdRoute =
+  AuthenticatedClearingJobIdRouteImport.update({
+    id: '/$jobId',
+    path: '/$jobId',
+    getParentRoute: () => AuthenticatedClearingRoute,
+  } as any)
 const AuthenticatedClientsIndexRoute =
   AuthenticatedClientsIndexRouteImport.update({
     id: '/clients/',
@@ -167,6 +175,12 @@ const AuthenticatedInvoicesIdRoute = AuthenticatedInvoicesIdRouteImport.update({
   path: '/invoices/$id',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedInvoicesNewRoute =
+  AuthenticatedInvoicesNewRouteImport.update({
+    id: '/invoices/new',
+    path: '/invoices/new',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedJobsIndexRoute = AuthenticatedJobsIndexRouteImport.update({
   id: '/jobs/',
   path: '/jobs/',
@@ -185,7 +199,7 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AuthenticatedAdminRoute
   '/ageing': typeof AuthenticatedAgeingRoute
   '/audit': typeof AuthenticatedAuditRoute
-  '/clearing': typeof AuthenticatedClearingRoute
+  '/clearing': typeof AuthenticatedClearingRouteWithChildren
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/exceptions': typeof AuthenticatedExceptionsRoute
   '/import-export': typeof AuthenticatedImportExportRoute
@@ -199,8 +213,10 @@ export interface FileRoutesByFullPath {
   '/settings': typeof AuthenticatedSettingsRoute
   '/unallocated': typeof AuthenticatedUnallocatedRoute
   '/users': typeof AuthenticatedUsersRoute
+  '/clearing/$jobId': typeof AuthenticatedClearingJobIdRoute
   '/clients/$id': typeof AuthenticatedClientsIdRoute
   '/invoices/$id': typeof AuthenticatedInvoicesIdRoute
+  '/invoices/new': typeof AuthenticatedInvoicesNewRoute
   '/jobs/$id': typeof AuthenticatedJobsIdRoute
   '/clients/': typeof AuthenticatedClientsIndexRoute
   '/invoices/': typeof AuthenticatedInvoicesIndexRoute
@@ -213,7 +229,7 @@ export interface FileRoutesByTo {
   '/admin': typeof AuthenticatedAdminRoute
   '/ageing': typeof AuthenticatedAgeingRoute
   '/audit': typeof AuthenticatedAuditRoute
-  '/clearing': typeof AuthenticatedClearingRoute
+  '/clearing': typeof AuthenticatedClearingRouteWithChildren
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/exceptions': typeof AuthenticatedExceptionsRoute
   '/import-export': typeof AuthenticatedImportExportRoute
@@ -227,8 +243,10 @@ export interface FileRoutesByTo {
   '/settings': typeof AuthenticatedSettingsRoute
   '/unallocated': typeof AuthenticatedUnallocatedRoute
   '/users': typeof AuthenticatedUsersRoute
+  '/clearing/$jobId': typeof AuthenticatedClearingJobIdRoute
   '/clients/$id': typeof AuthenticatedClientsIdRoute
   '/invoices/$id': typeof AuthenticatedInvoicesIdRoute
+  '/invoices/new': typeof AuthenticatedInvoicesNewRoute
   '/jobs/$id': typeof AuthenticatedJobsIdRoute
   '/clients': typeof AuthenticatedClientsIndexRoute
   '/invoices': typeof AuthenticatedInvoicesIndexRoute
@@ -243,7 +261,7 @@ export interface FileRoutesById {
   '/_authenticated/admin': typeof AuthenticatedAdminRoute
   '/_authenticated/ageing': typeof AuthenticatedAgeingRoute
   '/_authenticated/audit': typeof AuthenticatedAuditRoute
-  '/_authenticated/clearing': typeof AuthenticatedClearingRoute
+  '/_authenticated/clearing': typeof AuthenticatedClearingRouteWithChildren
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/exceptions': typeof AuthenticatedExceptionsRoute
   '/_authenticated/import-export': typeof AuthenticatedImportExportRoute
@@ -257,8 +275,10 @@ export interface FileRoutesById {
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/_authenticated/unallocated': typeof AuthenticatedUnallocatedRoute
   '/_authenticated/users': typeof AuthenticatedUsersRoute
+  '/_authenticated/clearing/$jobId': typeof AuthenticatedClearingJobIdRoute
   '/_authenticated/clients/$id': typeof AuthenticatedClientsIdRoute
   '/_authenticated/invoices/$id': typeof AuthenticatedInvoicesIdRoute
+  '/_authenticated/invoices/new': typeof AuthenticatedInvoicesNewRoute
   '/_authenticated/jobs/$id': typeof AuthenticatedJobsIdRoute
   '/_authenticated/clients/': typeof AuthenticatedClientsIndexRoute
   '/_authenticated/invoices/': typeof AuthenticatedInvoicesIndexRoute
@@ -287,8 +307,10 @@ export interface FileRouteTypes {
     | '/settings'
     | '/unallocated'
     | '/users'
+    | '/clearing/$jobId'
     | '/clients/$id'
     | '/invoices/$id'
+    | '/invoices/new'
     | '/jobs/$id'
     | '/clients/'
     | '/invoices/'
@@ -315,8 +337,10 @@ export interface FileRouteTypes {
     | '/settings'
     | '/unallocated'
     | '/users'
+    | '/clearing/$jobId'
     | '/clients/$id'
     | '/invoices/$id'
+    | '/invoices/new'
     | '/jobs/$id'
     | '/clients'
     | '/invoices'
@@ -344,8 +368,10 @@ export interface FileRouteTypes {
     | '/_authenticated/settings'
     | '/_authenticated/unallocated'
     | '/_authenticated/users'
+    | '/_authenticated/clearing/$jobId'
     | '/_authenticated/clients/$id'
     | '/_authenticated/invoices/$id'
+    | '/_authenticated/invoices/new'
     | '/_authenticated/jobs/$id'
     | '/_authenticated/clients/'
     | '/_authenticated/invoices/'
@@ -508,6 +534,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedUsersRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/clearing/$jobId': {
+      id: '/_authenticated/clearing/$jobId'
+      path: '/$jobId'
+      fullPath: '/clearing/$jobId'
+      preLoaderRoute: typeof AuthenticatedClearingJobIdRouteImport
+      parentRoute: typeof AuthenticatedClearingRoute
+    }
     '/_authenticated/clients/': {
       id: '/_authenticated/clients/'
       path: '/clients'
@@ -536,6 +569,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedInvoicesIdRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/invoices/new': {
+      id: '/_authenticated/invoices/new'
+      path: '/invoices/new'
+      fullPath: '/invoices/new'
+      preLoaderRoute: typeof AuthenticatedInvoicesNewRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/jobs/': {
       id: '/_authenticated/jobs/'
       path: '/jobs'
@@ -553,11 +593,24 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AuthenticatedClearingRouteChildren {
+  AuthenticatedClearingJobIdRoute: typeof AuthenticatedClearingJobIdRoute
+}
+
+const AuthenticatedClearingRouteChildren: AuthenticatedClearingRouteChildren = {
+  AuthenticatedClearingJobIdRoute: AuthenticatedClearingJobIdRoute,
+}
+
+const AuthenticatedClearingRouteWithChildren =
+  AuthenticatedClearingRoute._addFileChildren(
+    AuthenticatedClearingRouteChildren,
+  )
+
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedAdminRoute: typeof AuthenticatedAdminRoute
   AuthenticatedAgeingRoute: typeof AuthenticatedAgeingRoute
   AuthenticatedAuditRoute: typeof AuthenticatedAuditRoute
-  AuthenticatedClearingRoute: typeof AuthenticatedClearingRoute
+  AuthenticatedClearingRoute: typeof AuthenticatedClearingRouteWithChildren
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
   AuthenticatedExceptionsRoute: typeof AuthenticatedExceptionsRoute
   AuthenticatedImportExportRoute: typeof AuthenticatedImportExportRoute
@@ -573,6 +626,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedUsersRoute: typeof AuthenticatedUsersRoute
   AuthenticatedClientsIdRoute: typeof AuthenticatedClientsIdRoute
   AuthenticatedInvoicesIdRoute: typeof AuthenticatedInvoicesIdRoute
+  AuthenticatedInvoicesNewRoute: typeof AuthenticatedInvoicesNewRoute
   AuthenticatedJobsIdRoute: typeof AuthenticatedJobsIdRoute
   AuthenticatedClientsIndexRoute: typeof AuthenticatedClientsIndexRoute
   AuthenticatedInvoicesIndexRoute: typeof AuthenticatedInvoicesIndexRoute
@@ -583,7 +637,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAdminRoute: AuthenticatedAdminRoute,
   AuthenticatedAgeingRoute: AuthenticatedAgeingRoute,
   AuthenticatedAuditRoute: AuthenticatedAuditRoute,
-  AuthenticatedClearingRoute: AuthenticatedClearingRoute,
+  AuthenticatedClearingRoute: AuthenticatedClearingRouteWithChildren,
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
   AuthenticatedExceptionsRoute: AuthenticatedExceptionsRoute,
   AuthenticatedImportExportRoute: AuthenticatedImportExportRoute,
@@ -599,6 +653,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedUsersRoute: AuthenticatedUsersRoute,
   AuthenticatedClientsIdRoute: AuthenticatedClientsIdRoute,
   AuthenticatedInvoicesIdRoute: AuthenticatedInvoicesIdRoute,
+  AuthenticatedInvoicesNewRoute: AuthenticatedInvoicesNewRoute,
   AuthenticatedJobsIdRoute: AuthenticatedJobsIdRoute,
   AuthenticatedClientsIndexRoute: AuthenticatedClientsIndexRoute,
   AuthenticatedInvoicesIndexRoute: AuthenticatedInvoicesIndexRoute,
