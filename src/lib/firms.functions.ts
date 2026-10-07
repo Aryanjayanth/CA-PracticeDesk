@@ -5,8 +5,8 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 const roleEnum = z.enum(["admin", "staff", "cashier"]);
 
 const inviteSchema = z.object({
-  firmId: z.string().uuid(),
-  email: z.string().trim().toLowerCase().email().max(255),
+  firmId: z.string().trim().min(1, "Please select a firm"),
+  email: z.string().trim().toLowerCase().email("Please enter a valid email address").max(255),
   fullName: z.string().trim().max(120).optional(),
   role: roleEnum,
   redirectTo: z.string().url(),
@@ -219,8 +219,13 @@ export const generateLoginLink = createServerFn({ method: "POST" })
   .inputValidator((d) =>
     z
       .object({
-        email: z.string().trim().toLowerCase().email(),
-        firmId: z.string().uuid().optional(),
+        email: z.string().trim().toLowerCase().email("Please enter a valid email address"),
+        firmId: z
+          .string()
+          .trim()
+          .optional()
+          .nullable()
+          .transform((v) => (v && v.length > 5 ? v : undefined)),
         role: roleEnum.optional(),
         redirectTo: z.string().url().optional(),
       })
