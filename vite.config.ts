@@ -16,7 +16,8 @@ export default defineConfig(({ command }) => ({
     ...(command === "build"
       ? [
           nitro({
-            defaultPreset: "node-server",
+            defaultPreset:
+              process.env.NITRO_PRESET || (process.env.VERCEL ? "vercel" : "node-server"),
           }),
         ]
       : []),
