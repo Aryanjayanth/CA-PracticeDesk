@@ -47,6 +47,17 @@ function SetPassword() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    // Read prefilled email and OTP from direct activation link URL
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const qEmail = params.get("email");
+      const qOtp = params.get("otp");
+      if (qEmail) setEmail(qEmail.trim());
+      if (qOtp) setOtp(qOtp.trim());
+    } catch {
+      // ignore
+    }
+
     supabase.auth.getSession().then(({ data }) => {
       if (data.session) {
         setReady(true);

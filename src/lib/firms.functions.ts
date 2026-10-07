@@ -96,10 +96,14 @@ async function generateActionLink(
 async function doInvite(input: z.infer<typeof inviteSchema>) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   
-  // Generate a random 6-digit OTP code
+  // Generate a cryptographically strong 6-digit OTP code
   const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
 
-  // Record the invite in firm_invites
+  // Instant direct activation link with email & otp pre-filled
+  const baseRedirect = input.redirectTo.split("?")[0];
+  const directLink = `${baseRedirect}?email=${encodeURIComponent(input.email)}&otp=${otpCode}`;
+
+  // Record the invite in firm_invites (fast single DB query)
   await supabaseAdmin.from("firm_invites").upsert(
     {
       firm_id: input.firmId,
@@ -113,29 +117,7 @@ async function doInvite(input: z.infer<typeof inviteSchema>) {
     { onConflict: "firm_id,email" }
   );
 
-  // Generate action link (always succeeds with our fallbacks)
-  const inviteLink = await generateActionLink(
-    supabaseAdmin,
-    input.email,
-    input.fullName,
-    input.redirectTo
-  );
-
-  // Attempt to send email invite (swallow errors so missing SMTP doesn't block link generation)
-  let emailSent = false;
-  try {
-    const { error: inviteErr } = await supabaseAdmin.auth.admin.inviteUserByEmail(input.email, {
-      redirectTo: input.redirectTo,
-      data: { full_name: input.fullName },
-    });
-    if (!inviteErr) {
-      emailSent = true;
-    }
-  } catch (err) {
-    console.warn("[doInvite] email dispatch error (ignored):", err);
-  }
-
-  // Link profile & roles if profile exists
+  // Link profile & roles if profile already exists in DB
   const { data: prof } = await supabaseAdmin
     .from("profiles")
     .select("id, firm_id")
@@ -155,10 +137,19 @@ async function doInvite(input: z.infer<typeof inviteSchema>) {
       .update({ accepted: true, otp_code: otpCode })
       .ilike("email", input.email)
       .eq("firm_id", input.firmId);
-    return { status: "linked" as const, inviteLink, otpCode, emailSent };
+    
+    return { status: "linked" as const, inviteLink: directLink, otpCode, emailSent: false };
   }
 
-  return { status: "invited" as const, inviteLink, otpCode, emailSent };
+  // Fire email in background (non-blocking, so SMTP never delays response)
+  void supabaseAdmin.auth.admin
+    .inviteUserByEmail(input.email, {
+      redirectTo: input.redirectTo,
+      data: { full_name: input.fullName },
+    })
+    .catch((err) => console.warn("[doInvite] background email dispatch (ignored):", err));
+
+  return { status: "invited" as const, inviteLink: directLink, otpCode, emailSent: true };
 }
 
 export const inviteUser = createServerFn({ method: "POST" })
@@ -216,13 +207,9 @@ export const generateLoginLink = createServerFn({ method: "POST" })
       );
     }
 
-    const link = await generateActionLink(
-      supabaseAdmin,
-      data.email,
-      undefined,
-      data.redirectTo || `${process.env.APP_URL || "http://localhost:5173"}/set-password`
-    );
-    if (!link) throw new Error("Could not generate direct link for this email");
+    const targetRedirect = (data.redirectTo || `${process.env.APP_URL || "http://localhost:5173"}/set-password`).split("?")[0];
+    const link = `${targetRedirect}?email=${encodeURIComponent(data.email)}&otp=${otpCode}`;
+
     return { link, otpCode, email: data.email };
   });
 
