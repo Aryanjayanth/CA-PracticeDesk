@@ -391,7 +391,7 @@ function NewFirmDialog({
         <DialogHeader>
           <DialogTitle>Create a new firm</DialogTitle>
           <DialogDescription>
-            The owner gets an email to set their password and sign in.
+            The Admin gets an email to set their password and sign in.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3.5">

@@ -6,7 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DataTable } from "@/components/app/DataTable";
-import { Field, NativeSelect, NoAccess, PageHeader } from "@/components/app/common";
+import { ClientSelect, Field, NativeSelect, NoAccess, PageHeader } from "@/components/app/common";
 import { useRoles } from "@/hooks/use-roles";
 import { ReportCharts } from "@/components/app/ReportCharts";
 import {
@@ -349,14 +349,13 @@ function ReportsPage() {
           <Input type="date" value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} />
         </Field>
         <Field label="Client">
-          <NativeSelect value={f.client} onChange={(e) => setF({ ...f, client: e.target.value })}>
-            <option value="">All</option>
-            {d?.c.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </NativeSelect>
+          <ClientSelect
+            value={f.client}
+            onChange={(id) => setF({ ...f, client: id })}
+            clients={d?.c}
+            placeholder="All clients"
+            allowClear
+          />
         </Field>
         <Field label="Service">
           <NativeSelect value={f.service} onChange={(e) => setF({ ...f, service: e.target.value })}>

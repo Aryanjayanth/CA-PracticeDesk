@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import {
+  Download,
   LayoutGrid,
   List,
   Mail,
@@ -21,7 +22,8 @@ import { ChipFilterRow, ChipSelect, PageHeader, type ChipOption } from "@/compon
 import { StatusBadge } from "@/components/app/StatusBadge";
 import { ClientForm } from "@/components/app/ClientForm";
 import { EntityAvatar } from "@/components/app/EntityAvatar";
-import { useProfiles, useRoles } from "@/hooks/use-roles";
+import { useProfiles } from "@/hooks/use-roles";
+import { usePermissions } from "@/hooks/use-permissions";
 import {
   CLIENT_STATUSES,
   CLIENT_TYPES,
@@ -30,7 +32,7 @@ import {
   optionValues,
   uniqSorted,
 } from "@/lib/client-options";
-import { fmtDate } from "@/lib/format";
+import { downloadCsv, fmtDate } from "@/lib/format";
 
 export const Route = createFileRoute("/_authenticated/clients/")({
   head: () => ({
@@ -104,7 +106,7 @@ function ClientsPage() {
   const [showFilters, setShowFilters] = useState(false);
   const [f, setF] = useState<Filters>(NO_FILTERS);
   const navigate = useNavigate();
-  const { isManager } = useRoles();
+  const { canCreate } = usePermissions();
   const { data: profiles } = useProfiles();
   const pname = useCallback(
     (id: string | null) => profiles?.find((p) => p.id === id)?.full_name ?? "—",
@@ -233,8 +235,43 @@ function ClientsPage() {
         }
         actions={
           <>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 font-medium"
+              disabled={!rows.length}
+              onClick={() => {
+                const stamp = new Date().toISOString().slice(0, 10);
+                downloadCsv(
+                  `clients_${stamp}.csv`,
+                  rows.map((c) => ({
+                    "Client Code": c.client_code,
+                    "Name": c.name,
+                    "Client Type": c.client_type,
+                    "Status": c.status,
+                    "Mobile": c.mobile,
+                    "Secondary Phone": c.secondary_phone ?? "",
+                    "Email": c.email ?? "",
+                    "PAN": c.pan ?? "",
+                    "TAN": c.tan ?? "",
+                    "GSTIN": c.gstin ?? "",
+                    "GST Type": c.gst_type ?? "",
+                    "Industry": c.industry ?? c.business_type ?? "",
+                    "Contact Person": c.contact_person_name ?? "",
+                    "Contact Phone": c.contact_person_phone ?? "",
+                    "Contact Role": c.contact_person_role ?? "",
+                    "Assigned Staff": pname(c.assigned_staff),
+                    "Address": c.address,
+                  })),
+                );
+              }}
+              title="Export filtered clients to CSV"
+            >
+              <Download className="h-4 w-4" />
+              Export CSV
+            </Button>
             {toggle}
-            {isManager && (
+            {canCreate("clients") && (
               <Button onClick={() => setOpen(true)}>
                 <Plus className="mr-1 h-4 w-4" />
                 Add Client
@@ -415,6 +452,7 @@ function ClientsPage() {
               : "No clients match your search or filters."
           }
           pageSize={20}
+          exportFilename="clients"
           onRowClick={(c) => go(c.id)}
           columns={[
             {
@@ -428,7 +466,12 @@ function ClientsPage() {
                 </span>
               ),
             },
-            { key: "client_code", header: "ID", className: "font-mono text-xs" },
+            {
+              key: "client_code",
+              header: "ID",
+              className: "font-mono text-xs",
+              sort: (c) => Number(String(c.client_code).replace(/\D/g, "")) || 0,
+            },
             { key: "client_type", header: "Type" },
             { key: "pan", header: "PAN", className: "font-mono text-xs" },
             {

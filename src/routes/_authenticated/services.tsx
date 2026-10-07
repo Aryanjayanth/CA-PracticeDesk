@@ -18,7 +18,7 @@ import {
   type ChipOption,
 } from "@/components/app/common";
 import { StatusBadge } from "@/components/app/StatusBadge";
-import { useRoles } from "@/hooks/use-roles";
+import { usePermissions } from "@/hooks/use-permissions";
 import { errMsg, fmtDate, inr } from "@/lib/format";
 import { RECURRING_FREQS, SERVICE_TYPES } from "@/lib/service-options";
 
@@ -47,7 +47,7 @@ const FREQ_LABEL: Record<string, string> = Object.fromEntries(
 const Req = () => <span className="ml-0.5 font-semibold text-destructive">*</span>;
 
 function ServicesPage() {
-  const { isManager } = useRoles();
+  const { canCreate, canEdit } = usePermissions();
   const [editing, setEditing] = useState<Svc | "new" | null>(null);
 
   const q = useQuery({
@@ -101,7 +101,7 @@ function ServicesPage() {
         title="Services"
         subtitle="What your firm offers. Fees and due-day rules are set per client assignment."
         actions={
-          isManager && (
+          canCreate("services") && (
             <Button onClick={() => setEditing("new")}>
               <Plus className="mr-1 h-4 w-4" />
               Add Service
@@ -114,9 +114,26 @@ function ServicesPage() {
         loading={q.isLoading}
         empty="No services defined yet."
         search={(s) => `${s.name} ${s.service_type} ${s.service_code}`}
-        onRowClick={isManager ? (s) => setEditing(s) : undefined}
+        exportFilename="services"
+        exportTransform={(s) => ({
+          "Service Code": s.service_code,
+          "Service Name": s.name,
+          "Service Type": s.service_type,
+          "Billing Type": s.billing_type === "recurring" ? "Recurring" : "One-time",
+          "Frequency": s.frequency === "one_time" ? "One-time" : (FREQ_LABEL[s.frequency] ?? s.frequency),
+          "Auto-Invoice": s.auto_invoice ? "Yes" : "No",
+          "Status": s.active ? "Active" : "Inactive",
+          "Scope of Work": s.description ?? "",
+          "Created Date": fmtDate(s.created_at),
+        })}
+        onRowClick={canEdit("services") ? (s) => setEditing(s) : undefined}
         columns={[
-          { key: "service_code", header: "ID", className: "font-mono text-xs" },
+          {
+            key: "service_code",
+            header: "ID",
+            className: "font-mono text-xs",
+            sort: (s) => Number(String(s.service_code).replace(/\D/g, "")) || 0,
+          },
           {
             key: "name",
             header: "Service",
@@ -220,7 +237,7 @@ function ServiceForm({
   const qc = useQueryClient();
   const [name, setName] = useState(svc?.name ?? "");
   const [type, setType] = useState(svc?.service_type ?? "");
-  const [recurring, setRecurring] = useState(svc?.billing_type !== "one_time");
+  const [recurring, setRecurring] = useState(svc ? svc.billing_type !== "one_time" : false);
   const [freq, setFreq] = useState(svc && svc.frequency !== "one_time" ? svc.frequency : "monthly");
   // Remembered so flipping the toggle off and on again restores the choice.
   const [lastRecurringFreq, setLastRecurringFreq] = useState(freq);
@@ -318,7 +335,12 @@ function ServiceForm({
             />
           </Field>
           <Field label="Service Code">
-            <Input value={svc?.service_code ?? "auto"} disabled className="bg-muted font-mono" />
+            <Input
+              value={svc?.service_code ?? "assigned on save"}
+              readOnly
+              disabled
+              className="bg-muted font-mono"
+            />
           </Field>
         </div>
         <Field

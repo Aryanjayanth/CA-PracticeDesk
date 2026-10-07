@@ -11,6 +11,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { useRoles } from "@/hooks/use-roles";
+import { usePermissions } from "@/hooks/use-permissions";
 import { inr } from "@/lib/format";
 
 type Hit = { id: string; group: string; title: string; sub: string; go: () => void };
@@ -20,7 +21,8 @@ export function GlobalSearch() {
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<Hit[]>([]);
   const navigate = useNavigate();
-  const { isStaff, isFinance } = useRoles();
+  const { isFinance } = useRoles();
+  const { canView, canSeeAmounts } = usePermissions();
 
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
@@ -41,7 +43,7 @@ export function GlobalSearch() {
     const s = q.trim().replace(/[%,()]/g, "");
     const t = setTimeout(async () => {
       const out: Hit[] = [];
-      if (isStaff) {
+      if (canView("clients")) {
         const { data: c } = await supabase
           .from("clients")
           .select("id,name,client_code,pan,gstin,mobile")
@@ -58,6 +60,8 @@ export function GlobalSearch() {
             go: () => navigate({ to: "/clients/$id", params: { id: x.id } }),
           }),
         );
+      }
+      if (canView("jobs")) {
         const { data: j } = await supabase
           .from("jobs")
           .select("id,job_code,title")
@@ -89,24 +93,27 @@ export function GlobalSearch() {
           }),
         );
       }
-      const { data: p } = await supabase
-        .from("payments")
-        .select("id,payment_code,reference,amount")
-        .or(`payment_code.ilike.%${s}%,reference.ilike.%${s}%`)
-        .limit(6);
-      p?.forEach((x) =>
-        out.push({
-          id: x.id,
-          group: "Payments",
-          title: x.payment_code,
-          sub: `${x.reference ?? ""} · ${inr(x.amount)}`,
-          go: () => navigate({ to: "/payments" }),
-        }),
-      );
+      const showAmount = canSeeAmounts("payments");
+      if (canView("payments")) {
+        const { data: p } = await supabase
+          .from("payments")
+          .select("id,payment_code,reference,amount")
+          .or(`payment_code.ilike.%${s}%,reference.ilike.%${s}%`)
+          .limit(6);
+        p?.forEach((x) =>
+          out.push({
+            id: x.id,
+            group: "Payments",
+            title: x.payment_code,
+            sub: [x.reference, showAmount ? inr(x.amount) : ""].filter(Boolean).join(" · "),
+            go: () => navigate({ to: "/payments" }),
+          }),
+        );
+      }
       setHits(out);
     }, 250);
     return () => clearTimeout(t);
-  }, [q, isStaff, isFinance, navigate]);
+  }, [q, canView, canSeeAmounts, isFinance, navigate]);
 
   const groups = [...new Set(hits.map((h) => h.group))];
   return (

@@ -19,6 +19,7 @@ import { Route as AuthenticatedAuditRouteImport } from './routes/_authenticated/
 import { Route as AuthenticatedClearingRouteImport } from './routes/_authenticated/clearing'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedExceptionsRouteImport } from './routes/_authenticated/exceptions'
+import { Route as AuthenticatedExpensesRouteImport } from './routes/_authenticated/expenses'
 import { Route as AuthenticatedImportExportRouteImport } from './routes/_authenticated/import-export'
 import { Route as AuthenticatedOutstandingRouteImport } from './routes/_authenticated/outstanding'
 import { Route as AuthenticatedPaymentsRouteImport } from './routes/_authenticated/payments'
@@ -86,6 +87,11 @@ const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
 const AuthenticatedExceptionsRoute = AuthenticatedExceptionsRouteImport.update({
   id: '/exceptions',
   path: '/exceptions',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedExpensesRoute = AuthenticatedExpensesRouteImport.update({
+  id: '/expenses',
+  path: '/expenses',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedImportExportRoute =
@@ -202,6 +208,7 @@ export interface FileRoutesByFullPath {
   '/clearing': typeof AuthenticatedClearingRouteWithChildren
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/exceptions': typeof AuthenticatedExceptionsRoute
+  '/expenses': typeof AuthenticatedExpensesRoute
   '/import-export': typeof AuthenticatedImportExportRoute
   '/outstanding': typeof AuthenticatedOutstandingRoute
   '/payments': typeof AuthenticatedPaymentsRoute
@@ -232,6 +239,7 @@ export interface FileRoutesByTo {
   '/clearing': typeof AuthenticatedClearingRouteWithChildren
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/exceptions': typeof AuthenticatedExceptionsRoute
+  '/expenses': typeof AuthenticatedExpensesRoute
   '/import-export': typeof AuthenticatedImportExportRoute
   '/outstanding': typeof AuthenticatedOutstandingRoute
   '/payments': typeof AuthenticatedPaymentsRoute
@@ -264,6 +272,7 @@ export interface FileRoutesById {
   '/_authenticated/clearing': typeof AuthenticatedClearingRouteWithChildren
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/exceptions': typeof AuthenticatedExceptionsRoute
+  '/_authenticated/expenses': typeof AuthenticatedExpensesRoute
   '/_authenticated/import-export': typeof AuthenticatedImportExportRoute
   '/_authenticated/outstanding': typeof AuthenticatedOutstandingRoute
   '/_authenticated/payments': typeof AuthenticatedPaymentsRoute
@@ -296,6 +305,7 @@ export interface FileRouteTypes {
     | '/clearing'
     | '/dashboard'
     | '/exceptions'
+    | '/expenses'
     | '/import-export'
     | '/outstanding'
     | '/payments'
@@ -326,6 +336,7 @@ export interface FileRouteTypes {
     | '/clearing'
     | '/dashboard'
     | '/exceptions'
+    | '/expenses'
     | '/import-export'
     | '/outstanding'
     | '/payments'
@@ -357,6 +368,7 @@ export interface FileRouteTypes {
     | '/_authenticated/clearing'
     | '/_authenticated/dashboard'
     | '/_authenticated/exceptions'
+    | '/_authenticated/expenses'
     | '/_authenticated/import-export'
     | '/_authenticated/outstanding'
     | '/_authenticated/payments'
@@ -455,6 +467,13 @@ declare module '@tanstack/react-router' {
       path: '/exceptions'
       fullPath: '/exceptions'
       preLoaderRoute: typeof AuthenticatedExceptionsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/expenses': {
+      id: '/_authenticated/expenses'
+      path: '/expenses'
+      fullPath: '/expenses'
+      preLoaderRoute: typeof AuthenticatedExpensesRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/import-export': {
@@ -613,6 +632,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedClearingRoute: typeof AuthenticatedClearingRouteWithChildren
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
   AuthenticatedExceptionsRoute: typeof AuthenticatedExceptionsRoute
+  AuthenticatedExpensesRoute: typeof AuthenticatedExpensesRoute
   AuthenticatedImportExportRoute: typeof AuthenticatedImportExportRoute
   AuthenticatedOutstandingRoute: typeof AuthenticatedOutstandingRoute
   AuthenticatedPaymentsRoute: typeof AuthenticatedPaymentsRoute
@@ -640,6 +660,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedClearingRoute: AuthenticatedClearingRouteWithChildren,
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
   AuthenticatedExceptionsRoute: AuthenticatedExceptionsRoute,
+  AuthenticatedExpensesRoute: AuthenticatedExpensesRoute,
   AuthenticatedImportExportRoute: AuthenticatedImportExportRoute,
   AuthenticatedOutstandingRoute: AuthenticatedOutstandingRoute,
   AuthenticatedPaymentsRoute: AuthenticatedPaymentsRoute,

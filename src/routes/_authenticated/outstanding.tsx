@@ -1,9 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { toast } from "sonner";
+import { Download } from "lucide-react";
 import { DataTable } from "@/components/app/DataTable";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { NativeSelect, NoAccess, PageHeader, StatCard } from "@/components/app/common";
+import { ClientSelect, NativeSelect, NoAccess, PageHeader, StatCard } from "@/components/app/common";
 import { StatusBadge } from "@/components/app/StatusBadge";
 import { useProfiles, useRoles } from "@/hooks/use-roles";
 import { useReceivables } from "@/hooks/use-receivables";
@@ -11,6 +13,7 @@ import {
   ageingBucket,
   BUCKETS,
   daysBetween,
+  downloadCsv,
   fmtDate,
   inr,
   invoiceDisplayStatus,
@@ -114,14 +117,56 @@ function OutstandingPage() {
         title="Outstanding"
         subtitle="Unsettled invoices (cancelled invoices excluded)"
         actions={
-          <NativeSelect
-            value={view}
-            onChange={(e) => setView(e.target.value as "invoice" | "client")}
-            className="w-44"
-          >
-            <option value="invoice">Invoice-wise</option>
-            <option value="client">Client-wise</option>
-          </NativeSelect>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 font-medium"
+              disabled={!rows.length}
+              onClick={() => {
+                const stamp = new Date().toISOString().slice(0, 10);
+                if (view === "client") {
+                  downloadCsv(
+                    `outstanding_by_client_${stamp}.csv`,
+                    byClient.map((c) => ({
+                      "Client": c.name,
+                      "Receivable": c.total,
+                      "Paid": c.paid,
+                      "Outstanding": c.out,
+                    })),
+                  );
+                } else {
+                  downloadCsv(
+                    `outstanding_invoices_${stamp}.csv`,
+                    rows.map((i) => ({
+                      "Invoice No": i.invoice_no,
+                      "Client": i.clients?.name ?? "",
+                      "Service": svcOf(i) || i.description,
+                      "Invoice Date": fmtDate(i.invoice_date),
+                      "Due Date": fmtDate(i.due_date),
+                      "Ageing": ageingBucket(i.due_date),
+                      "Original Amount": i.total,
+                      "Paid Amount": i.amount_paid,
+                      "Outstanding": i.outstanding,
+                      "Status": label(invoiceDisplayStatus(i)),
+                    })),
+                  );
+                }
+              }}
+              title="Export filtered outstanding data to CSV"
+            >
+              <Download className="h-4 w-4" />
+              Export CSV
+            </Button>
+            <NativeSelect
+              value={view}
+              onChange={(e) => setView(e.target.value as "invoice" | "client")}
+              className="w-44"
+            >
+              <option value="invoice">Invoice-wise</option>
+              <option value="client">Client-wise</option>
+            </NativeSelect>
+          </div>
         }
       />
       <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -136,16 +181,28 @@ function OutstandingPage() {
           loading={q.isLoading}
           empty="Nothing outstanding."
           search={(i) => `${i.invoice_no} ${i.clients?.name}`}
+          exportFilename="outstanding_invoices"
+          exportTransform={(i) => ({
+            "Invoice No": i.invoice_no,
+            "Client": i.clients?.name ?? "",
+            "Service": svcOf(i) || i.description,
+            "Invoice Date": fmtDate(i.invoice_date),
+            "Due Date": fmtDate(i.due_date),
+            "Ageing": ageingBucket(i.due_date),
+            "Original Amount": i.total,
+            "Paid Amount": i.amount_paid,
+            "Outstanding": i.outstanding,
+            "Status": label(invoiceDisplayStatus(i)),
+          })}
           toolbar={
             <>
-              <NativeSelect value={fl.client} onChange={s("client")} className="w-40">
-                <option value="">All clients</option>
-                {clients.map(([id, n]) => (
-                  <option key={id} value={id}>
-                    {n}
-                  </option>
-                ))}
-              </NativeSelect>
+              <ClientSelect
+                value={fl.client}
+                onChange={(id) => setFl((p) => ({ ...p, client: id }))}
+                placeholder="All clients"
+                className="w-44"
+                allowClear
+              />
               <NativeSelect value={fl.service} onChange={s("service")} className="w-40">
                 <option value="">All services</option>
                 {services.map(([id, n]) => (

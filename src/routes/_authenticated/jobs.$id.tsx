@@ -2,7 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, ExternalLink, Receipt } from "lucide-react";
+import { ArrowLeft, ExternalLink, Receipt, CheckCircle2, ListChecks, Plus, Trash2, Sparkles } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, NativeSelect } from "@/components/app/common";
 import { StatusBadge } from "@/components/app/StatusBadge";
 import { useProfiles, useRoles } from "@/hooks/use-roles";
+import { usePermissions } from "@/hooks/use-permissions";
 import {
   errMsg,
   fmtDate,
@@ -38,6 +39,7 @@ function JobDetail() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { isFinance } = useRoles();
+  const { canEdit, canSeeAmounts } = usePermissions();
   const { data: profiles } = useProfiles();
   const pname = (u: string | null) => profiles?.find((p) => p.id === u)?.full_name ?? "System";
   const q = useQuery({
@@ -96,6 +98,7 @@ function JobDetail() {
     discount: "",
   });
   const [checklist, setChecklist] = useState<WorkflowStages | null>(null);
+  const [newItemText, setNewItemText] = useState("");
   const [raising, setRaising] = useState(false);
   const job = q.data?.job;
 
@@ -108,10 +111,19 @@ function JobDetail() {
   const items = useMemo(
     () =>
       rawItems.map((it) => {
-        const o = (it ?? {}) as { label?: unknown; done?: unknown };
+        const o = (it ?? {}) as {
+          id?: unknown;
+          label?: unknown;
+          done?: unknown;
+          fee?: unknown;
+          service_id?: unknown;
+        };
         return {
+          id: typeof o.id === "string" ? o.id : undefined,
           label: typeof o.label === "string" ? o.label : "",
           done: o.done === true,
+          fee: typeof o.fee === "number" ? o.fee : undefined,
+          service_id: typeof o.service_id === "string" ? o.service_id : undefined,
         };
       }),
     [rawItems],
@@ -131,6 +143,59 @@ function JobDetail() {
     } else {
       qc.invalidateQueries({ queryKey: ["job", id] });
     }
+  };
+
+  const addItem = async () => {
+    const text = newItemText.trim();
+    if (!text) return;
+    const next = [...items, { label: text, done: false }];
+    const { error } = await supabase.from("jobs").update({ checklist: next }).eq("id", id);
+    if (error) {
+      toast.error(errMsg(error));
+    } else {
+      setNewItemText("");
+      qc.invalidateQueries({ queryKey: ["job", id] });
+    }
+  };
+
+  const deleteItem = async (idx: number) => {
+    const next = items.filter((_, i) => i !== idx);
+    const { error } = await supabase.from("jobs").update({ checklist: next }).eq("id", id);
+    if (error) {
+      toast.error(errMsg(error));
+    } else {
+      qc.invalidateQueries({ queryKey: ["job", id] });
+    }
+  };
+
+  const loadStandardChecklist = async () => {
+    const standardSteps = [
+      { label: "Client Data & Documents Received", done: false },
+      { label: "Data Verification & Draft Computation", done: false },
+      { label: "Client Review & Approval", done: false },
+      { label: "Challan / Tax Paid (if applicable)", done: false },
+      { label: "Filed on Government Portal", done: false },
+      { label: "Acknowledgement & Final Copy Shared", done: false },
+    ];
+    const { error } = await supabase.from("jobs").update({ checklist: standardSteps }).eq("id", id);
+    if (error) {
+      toast.error(errMsg(error));
+    } else {
+      toast.success("Standard compliance checklist loaded");
+      qc.invalidateQueries({ queryKey: ["job", id] });
+    }
+  };
+
+  const markJobCompletedFromChecklist = async () => {
+    if (!canEdit("jobs")) return toast.error("Not authorised");
+    const { error } = await supabase.rpc("update_job_status", {
+      _job_id: id,
+      _status: "completed",
+      _reason: "Checklist completed",
+    });
+    if (error) return toast.error(errMsg(error));
+    toast.success("Job marked as Completed! Ready for clearing.");
+    qc.invalidateQueries();
   };
 
   useEffect(() => {
@@ -165,6 +230,7 @@ function JobDetail() {
 
   const updateStatus = async () => {
     if (status === job.status) return;
+    if (!canEdit("jobs")) return toast.error("You cannot change job status");
     const { error } = await supabase.rpc("update_job_status", {
       _job_id: id,
       _status: status,
@@ -202,6 +268,7 @@ function JobDetail() {
   };
 
   const saveEdit = async () => {
+    if (!canEdit("jobs")) return toast.error("You cannot edit jobs");
     const fee = Number(edit.fee),
       disc = Number(edit.discount);
     if (
@@ -400,7 +467,7 @@ function JobDetail() {
                   <div className="text-xs text-muted-foreground">Created</div>
                   {fmtDate(job.created_at)}
                 </div>
-                {isFinance && (
+                {canSeeAmounts("jobs") && (
                   <>
                     <div>
                       <div className="text-xs text-muted-foreground">Fee</div>
@@ -419,7 +486,7 @@ function JobDetail() {
               </div>
             </CardContent>
           </Card>
-          {isFinance && (
+          {canEdit("jobs") && (
             <Card className="shadow-none">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm">Edit Job</CardTitle>
@@ -478,31 +545,133 @@ function JobDetail() {
         <div className="space-y-4">
           <Card className="shadow-none">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Checklist</CardTitle>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 font-semibold text-sm">
+                  <ListChecks className="h-4 w-4 text-primary" />
+                  <span>Job Checklist</span>
+                </div>
+                {items.length > 0 && (
+                  <span className="text-xs font-mono font-medium text-muted-foreground">
+                    {items.filter((i) => i.done).length}/{items.length}
+                  </span>
+                )}
+              </div>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
+              {/* Progress bar */}
+              {items.length > 0 && (
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full bg-primary transition-all duration-300"
+                    style={{
+                      width: `${Math.round((items.filter((i) => i.done).length / items.length) * 100)}%`,
+                    }}
+                  />
+                </div>
+              )}
+
               {items.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No checklist on this job.</p>
+                <div className="rounded-lg border border-dashed p-4 text-center space-y-2">
+                  <p className="text-xs text-muted-foreground">No checklist items yet.</p>
+                  {canEdit("jobs") && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={loadStandardChecklist}
+                      className="text-xs h-8"
+                    >
+                      <Sparkles className="mr-1.5 h-3.5 w-3.5 text-primary" />
+                      Load Compliance Steps
+                    </Button>
+                  )}
+                </div>
               ) : (
-                <ul className="space-y-1.5">
+                <ul className="space-y-2">
                   {items.map((it, i) => (
-                    <li key={`${it.label}-${i}`}>
-                      <label className="flex cursor-pointer items-center gap-2 text-sm">
+                    <li
+                      key={`${it.label}-${i}`}
+                      className="group flex items-center justify-between gap-2 rounded-md p-1.5 hover:bg-muted/40 transition-colors"
+                    >
+                      <label className="flex flex-1 cursor-pointer items-center gap-2.5 text-xs select-none">
                         <input
                           type="checkbox"
                           checked={it.done}
                           onChange={() => toggleItem(i)}
-                          className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                          className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
                         />
-                        <span className={it.done ? "line-through opacity-60" : ""}>{it.label}</span>
+                        <div className="flex flex-1 items-center justify-between gap-2 pr-1">
+                          <span
+                            className={
+                              it.done
+                                ? "line-through text-muted-foreground opacity-60 transition-all"
+                                : "text-foreground font-medium transition-all"
+                            }
+                          >
+                            {it.label}
+                          </span>
+                          {it.fee != null && it.fee > 0 && canSeeAmounts("jobs") && (
+                            <span className="font-mono text-[11px] font-semibold text-muted-foreground">
+                              {inr(it.fee)}
+                            </span>
+                          )}
+                        </div>
                       </label>
+                      {canEdit("jobs") && (
+                        <button
+                          type="button"
+                          onClick={() => deleteItem(i)}
+                          className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive p-1 transition-opacity"
+                          title="Delete item"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </li>
                   ))}
                 </ul>
               )}
-              <p className="mt-2 text-xs text-muted-foreground">
-                {items.filter((i) => i.done).length} of {items.length} complete
-              </p>
+
+              {/* Add checklist item */}
+              {canEdit("jobs") && (
+                <div className="flex items-center gap-1.5 pt-1">
+                  <Input
+                    placeholder="Add checklist step…"
+                    value={newItemText}
+                    onChange={(e) => setNewItemText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        addItem();
+                      }
+                    }}
+                    className="h-8 text-xs bg-background"
+                  />
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={addItem}
+                    disabled={!newItemText.trim()}
+                    className="h-8 px-2.5 shrink-0"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              )}
+
+              {/* One-click Complete Job button when checklist is done */}
+              {items.length > 0 &&
+                items.every((it) => it.done) &&
+                job.status !== "completed" &&
+                canEdit("jobs") && (
+                  <Button
+                    size="sm"
+                    onClick={markJobCompletedFromChecklist}
+                    className="w-full mt-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs h-8"
+                  >
+                    <CheckCircle2 className="mr-1.5 h-4 w-4" />
+                    Complete Job & Clear
+                  </Button>
+                )}
             </CardContent>
           </Card>
 
@@ -579,29 +748,31 @@ function JobDetail() {
             </CardContent>
           </Card>
 
-          <Card className="shadow-none">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Update Status</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <NativeSelect value={status} onChange={(e) => setStatus(e.target.value)}>
-                {JOB_STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {label(s)}
-                  </option>
-                ))}
-              </NativeSelect>
-              <Textarea
-                placeholder="Reason (optional)"
-                rows={2}
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-              />
-              <Button className="w-full" disabled={status === job.status} onClick={updateStatus}>
-                Update
-              </Button>
-            </CardContent>
-          </Card>
+          {canEdit("jobs") && (
+            <Card className="shadow-none">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Update Status</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <NativeSelect value={status} onChange={(e) => setStatus(e.target.value)}>
+                  {JOB_STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {label(s)}
+                    </option>
+                  ))}
+                </NativeSelect>
+                <Textarea
+                  placeholder="Reason (optional)"
+                  rows={2}
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                />
+                <Button className="w-full" disabled={status === job.status} onClick={updateStatus}>
+                  Update
+                </Button>
+              </CardContent>
+            </Card>
+          )}
           <Card className="shadow-none">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">Status History</CardTitle>

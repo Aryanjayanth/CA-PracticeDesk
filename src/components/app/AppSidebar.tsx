@@ -7,18 +7,17 @@ import {
   ClipboardList,
   FileText,
   Repeat,
+  ReceiptIndianRupee,
   Wallet,
   Shuffle,
   CircleDollarSign,
   AlertTriangle,
   CalendarClock,
-  Scale,
   BarChart3,
   UserCog,
   ShieldCheck,
   History,
   Settings,
-  TriangleAlert,
   Building2,
   ChevronDown,
   ArrowLeftRight,
@@ -36,46 +35,52 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useRoles, type Role } from "@/hooks/use-roles";
+import { usePermissions } from "@/hooks/use-permissions";
 import { useCurrentFirm, useSuperAdmin } from "@/hooks/use-firm";
 import { useAdminPrivacy } from "@/hooks/use-admin-privacy";
+import type { Module } from "@/lib/permissions";
 import { EntityAvatar } from "./EntityAvatar";
 import { cn } from "@/lib/utils";
 
-const M: Role[] = ["owner", "admin"];
-const F: Role[] = ["owner", "admin", "accountant"];
-const S: Role[] = ["owner", "admin", "accountant", "staff"];
+const M: Role[] = ["admin"];
 
-type Item = { title: string; url: string; icon: typeof Users; roles: Role[] };
+/** Nav items that follow the Admin's permission matrix rather than a role. */
+type Item = {
+  title: string;
+  url: string;
+  icon: typeof Users;
+  roles?: Role[];
+  module?: Module;
+};
 const groups: { label: string; items: Item[]; open?: boolean }[] = [
   {
     label: "Practice",
     open: true,
     items: [
-      { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard, roles: F },
-      { title: "Clients", url: "/clients", icon: Users, roles: S },
-      { title: "Services", url: "/services", icon: Briefcase, roles: S },
-      { title: "Jobs", url: "/jobs", icon: ClipboardList, roles: S },
-      { title: "Recurring Jobs", url: "/recurring", icon: Repeat, roles: S },
+      { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard, roles: M },
+      { title: "Clients", url: "/clients", icon: Users, module: "clients" },
+      { title: "Services", url: "/services", icon: Briefcase, module: "services" },
+      { title: "Jobs", url: "/jobs", icon: ClipboardList, module: "jobs" },
+      { title: "Recurring Jobs", url: "/recurring", icon: Repeat, module: "recurring" },
+      { title: "Expenses", url: "/expenses", icon: ReceiptIndianRupee, module: "expenses" },
     ],
   },
   {
     label: "Billing & Payments",
     open: true,
     items: [
-      { title: "Invoices", url: "/invoices", icon: FileText, roles: F },
-      { title: "Payment Entry", url: "/payments", icon: Wallet, roles: [...F, "cashier"] },
-      { title: "Payment Clearing", url: "/clearing", icon: Shuffle, roles: F },
-      { title: "Unallocated", url: "/unallocated", icon: CircleDollarSign, roles: F },
+      { title: "Invoices", url: "/invoices", icon: FileText, roles: M },
+      { title: "Payment Entry", url: "/payments", icon: Wallet, module: "payments" },
+      { title: "Payment Clearing", url: "/clearing", icon: Shuffle, roles: M },
+      { title: "Unallocated", url: "/unallocated", icon: CircleDollarSign, roles: M },
     ],
   },
   {
     label: "Receivables & Reports",
     items: [
-      { title: "Outstanding", url: "/outstanding", icon: AlertTriangle, roles: F },
-      { title: "Ageing", url: "/ageing", icon: CalendarClock, roles: F },
-      { title: "Reconciliation", url: "/reconciliation", icon: Scale, roles: F },
-      { title: "Exceptions", url: "/exceptions", icon: TriangleAlert, roles: F },
-      { title: "Reports", url: "/reports", icon: BarChart3, roles: F },
+      { title: "Outstanding", url: "/outstanding", icon: AlertTriangle, roles: M },
+      { title: "Ageing", url: "/ageing", icon: CalendarClock, roles: M },
+      { title: "Reports", url: "/reports", icon: BarChart3, roles: M },
     ],
   },
   {
@@ -94,6 +99,7 @@ export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
   const { has, loading } = useRoles();
+  const { canView } = usePermissions();
   const { isSuperAdmin } = useSuperAdmin();
   const { privacyMode } = useAdminPrivacy();
   const { data: firm } = useCurrentFirm();
@@ -163,7 +169,9 @@ export function AppSidebar() {
           firm &&
           !isPlatformMode &&
           groups.map((g) => {
-            const items = g.items.filter((i) => has(...i.roles));
+            const items = g.items.filter((i) =>
+              i.module ? canView(i.module) : has(...(i.roles ?? M)),
+            );
             if (!items.length) return null;
             const isOpen = collapsed || open[g.label];
             return (

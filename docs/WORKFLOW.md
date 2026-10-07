@@ -4,22 +4,50 @@ CA practice management & billing for multiple firms. Indian ₹ formatting, DD-M
 
 ## 1. Who can do what
 
-| Role                                           | Access                                                                                           |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| Super Admin (sankaaryanjayanth@gmail.com only) | Firms Console: create/suspend firms, invite owners, open any firm with full access, switch firms |
-| Owner                                          | Everything in their firm, incl. users, roles, audit, settings, import/export                     |
-| Admin                                          | Same as owner except creating owners                                                             |
-| Accountant                                     | Clients, services, jobs, invoices, payments, clearing, receivables, reconciliation, reports      |
-| Staff                                          | Clients and jobs assigned to them; update job status                                             |
-| Cashier                                        | Payment entry and own payment history only — never fees, invoices, receivables                   |
+There are three roles. **Admin** is the firm's top role and always has full
+access to its own data — it cannot be restricted, so a firm can never lock
+itself out. What **Staff** and **Cashier** may do is decided per module by an
+Admin on the **Roles & Permissions** screen, and stored in `role_permissions`.
+
+| Module                             | Actions the Admin can grant per role |
+| ---------------------------------- | ----------------------------------- |
+| Clients                            | View, Create, Edit, Delete, Amounts |
+| Services                           | View, Create, Edit, Delete, Amounts |
+| Jobs                               | View, Create, Edit, Delete, Amounts |
+| Recurring Jobs                     | View, Create, Edit, Delete, Amounts |
+| Payment Records                    | View, Create, Edit (reverse), Amounts |
+| Expenses                           | View, Create, Edit, Delete, Amounts |
+
+Notes on the matrix:
+
+- **View gates everything else.** Turning View off turns off the other four for
+  that module, because there is no point editing what you cannot open.
+- **Amounts** is separate from View, so a Cashier can record a payment without
+  seeing every fee and invoice total in the practice.
+- **Delete is refused for Payment Records** for every role, including Admin.
+  A payment is corrected by reversing it, which is why the Delete cell is locked.
+- A grant is firm-wide. Once Staff can view Clients they see every client, not
+  only the ones assigned to them.
+- Defaults preserve the previous behaviour: Staff read the practice modules and
+  can move job status; Cashier records and views payments.
+- Invoicing, receivables, reports, audit trail, users, roles, import/export and
+  settings are **not** in the matrix — they stay with Admin.
+
+Fixed roles outside the matrix:
+
+| Role              | Access                                                                                              |
+| ----------------- | --------------------------------------------------------------------------------------------------- |
+| Super Admin       | Firms Console: create/suspend firms, invite admins, open any firm with full access, switch firms      |
+| Admin             | Everything in their firm, incl. users, roles, audit, settings, import/export, invoicing, reports      |
+| Staff / Cashier   | Exactly what the Admin's matrix grants them                                                          |
 
 Each firm sees only its own data (enforced by the database, not the screens).
 
 ## 2. Onboarding
 
-1. Super admin signs in → Firms Console → **Create firm** (name, logo, city, phone, owner email).
-2. Owner receives an invite email → sets password on the Set Password page.
-3. Owner fills **Settings** (firm details, GSTIN, PAN, bank details, default GST %) and invites team from **Users**.
+1. Super admin signs in → Firms Console → **Create firm** (name, logo, city, phone, admin email).
+2. The Admin receives an invite email → sets password on the Set Password page.
+3. Admin fills **Settings** (firm details, GSTIN, PAN, bank details, default GST %), invites team from **Users**, then tunes what Staff and Cashier can do under **Roles & Permissions**.
 4. Nobody can join a firm by self sign-up; invites only.
 
 ## 3. Day-to-day workflow
@@ -42,7 +70,7 @@ Services -> Clients -> Client Services -> Jobs (auto) -> Invoices -> Payments ->
 12. **Exceptions** — items needing attention.
 13. **Reports** — charts (monthly invoiced vs collected, payment modes, ageing, invoice/job status, top debtors, reconciliation) + 16 tabular reports with date/client/service filters, CSV export, print/PDF.
 14. **Audit Trail** — every create/change/cancel/reversal with user, time, old/new values.
-15. **Import / Export** (Administration) — bulk data movement, owner/admin only.
+15. **Import / Export** (Administration) — bulk data movement, admin only.
     - **Export**: tick any of Clients, Services, Retainers, Jobs, Invoices, Payments → CSV or Excel (one sheet per entity). A snapshot of every record in the firm.
     - **Import**: Clients, Services and Retainers only. Download the template first — the Excel one has a `Format` sheet documenting every column and dropdowns on enum columns so invalid values can't be entered.
     - Every row is validated and shown before anything is written. Rows that already exist (clients match on PAN, services on name, retainers on client+service) are flagged as duplicates and default to **Skip**; choose per row or in bulk to Skip / Overwrite / Create as new copy.

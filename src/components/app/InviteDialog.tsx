@@ -15,22 +15,21 @@ import {
 } from "@/components/ui/dialog";
 import { Field } from "./common";
 import { inviteUser } from "@/lib/firms.functions";
-import { errMsg } from "@/lib/format";
+import { ROLES, type Role } from "@/hooks/use-roles";
+import { errMsg, label } from "@/lib/format";
 
 export function InviteDialog({
   firm,
   onClose,
-  allowOwner = true,
 }: {
   firm: { id: string; name: string } | null;
   onClose: () => void;
-  allowOwner?: boolean;
 }) {
   const qc = useQueryClient();
   const run = useServerFn(inviteUser);
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
-  const [role, setRole] = useState<"owner" | "admin" | "accountant" | "staff" | "cashier">("staff");
+  const [role, setRole] = useState<Role>("staff");
   const [busy, setBusy] = useState(false);
   const [createdLink, setCreatedLink] = useState<string | null>(null);
   const [invitedEmail, setInvitedEmail] = useState("");
@@ -157,15 +156,12 @@ export function InviteDialog({
               <Field label="Role">
                 <select
                   value={role}
-                  onChange={(e) => setRole(e.target.value as typeof role)}
+                  onChange={(e) => setRole(e.target.value as Role)}
                   className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
                 >
-                  {(allowOwner
-                    ? ["owner", "admin", "accountant", "staff", "cashier"]
-                    : ["admin", "accountant", "staff", "cashier"]
-                  ).map((r) => (
+                  {ROLES.map((r) => (
                     <option key={r} value={r}>
-                      {r[0].toUpperCase() + r.slice(1)}
+                      {label(r)}
                     </option>
                   ))}
                 </select>

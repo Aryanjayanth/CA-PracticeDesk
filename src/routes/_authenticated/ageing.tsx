@@ -1,8 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { Download } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { NoAccess, PageHeader, StatCard } from "@/components/app/common";
 import { useRoles } from "@/hooks/use-roles";
 import { useReceivables } from "@/hooks/use-receivables";
-import { ageingBucket, BUCKETS, inr } from "@/lib/format";
+import { ageingBucket, BUCKETS, downloadCsv, inr } from "@/lib/format";
 
 export const Route = createFileRoute("/_authenticated/ageing")({
   head: () => ({
@@ -49,7 +51,37 @@ function AgeingPage() {
 
   return (
     <div>
-      <PageHeader title="Receivables Ageing" subtitle="Outstanding grouped by days past due date" />
+      <PageHeader
+        title="Receivables Ageing"
+        subtitle="Outstanding grouped by days past due date"
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 font-medium"
+            disabled={!clients.length}
+            onClick={() => {
+              const stamp = new Date().toISOString().slice(0, 10);
+              downloadCsv(
+                `receivables_ageing_${stamp}.csv`,
+                clients.map((c) => ({
+                  "Client": c.name,
+                  "Current (0 days)": c.b["Current"] || 0,
+                  "1–30 Days": c.b["1–30 Days"] || 0,
+                  "31–60 Days": c.b["31–60 Days"] || 0,
+                  "61–90 Days": c.b["61–90 Days"] || 0,
+                  "90+ Days": c.b["90+ Days"] || 0,
+                  "Total Outstanding": c.t,
+                })),
+              );
+            }}
+            title="Export ageing analysis to CSV"
+          >
+            <Download className="h-4 w-4" />
+            Export CSV
+          </Button>
+        }
+      />
       <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-5">
         {BUCKETS.map((b, i) => (
           <StatCard

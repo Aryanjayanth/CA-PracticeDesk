@@ -59,6 +59,21 @@ function InvoicesPage() {
         loading={q.isLoading}
         empty="No invoices yet."
         search={(i) => `${i.invoice_no} ${i.clients?.name} ${i.description}`}
+        exportFilename="invoices"
+        exportTransform={(i) => ({
+          "Invoice No": i.invoice_no,
+          "Client": i.clients?.name ?? "",
+          "Invoice Date": fmtDate(i.invoice_date),
+          "Due Date": fmtDate(i.due_date),
+          "Subtotal": i.subtotal,
+          "Discount": i.discount,
+          "Tax Rate": i.tax_rate ?? 0,
+          "Tax Amount": i.tax_amount ?? 0,
+          "Total": i.total,
+          "Paid": i.amount_paid,
+          "Outstanding": i.outstanding,
+          "Status": label(invoiceDisplayStatus(i)),
+        })}
         onRowClick={(i) => navigate({ to: "/invoices/$id", params: { id: i.id } })}
         toolbar={
           <NativeSelect value={status} onChange={(e) => setStatus(e.target.value)} className="w-40">

@@ -1,8 +1,9 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { ArrowUpDown, ChevronLeft, ChevronRight, Inbox, Search } from "lucide-react";
+import { ArrowUpDown, ChevronLeft, ChevronRight, Download, Inbox, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { downloadCsv } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export type Column<T> = {
@@ -24,6 +25,8 @@ export function DataTable<T extends { id: string | number }>({
   pageSize = 15,
   onRowClick,
   footer,
+  exportFilename,
+  exportTransform,
 }: {
   rows: T[] | undefined;
   columns: Column<T>[];
@@ -34,6 +37,8 @@ export function DataTable<T extends { id: string | number }>({
   pageSize?: number;
   onRowClick?: (row: T) => void;
   footer?: ReactNode;
+  exportFilename?: string;
+  exportTransform?: (row: T) => Record<string, unknown>;
 }) {
   const [q, setQ] = useState("");
   const [sortKey, setSortKey] = useState<string | null>(null);
@@ -60,7 +65,7 @@ export function DataTable<T extends { id: string | number }>({
 
   return (
     <div className="rounded-lg border bg-card">
-      {(search || toolbar) && (
+      {(search || toolbar || exportFilename) && (
         <div className="flex flex-wrap items-center gap-2 border-b p-3">
           {search && (
             <div className="relative w-full max-w-xs">
@@ -77,6 +82,34 @@ export function DataTable<T extends { id: string | number }>({
             </div>
           )}
           {toolbar}
+          {exportFilename && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 ml-auto text-xs gap-1.5 font-medium"
+              onClick={() => {
+                const dataToExport = exportTransform
+                  ? filtered.map(exportTransform)
+                  : filtered.map((r) => {
+                      const out: Record<string, unknown> = {};
+                      for (const col of columns) {
+                        if (!col.header || col.key === "x" || col.key === "actions") continue;
+                        const val = (r as Record<string, unknown>)[col.key];
+                        out[col.header] = val ?? "";
+                      }
+                      return out;
+                    });
+                const stamp = new Date().toISOString().slice(0, 10);
+                downloadCsv(`${exportFilename}_${stamp}.csv`, dataToExport);
+              }}
+              disabled={!filtered.length}
+              title="Export current filtered data to CSV"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export CSV
+            </Button>
+          )}
         </div>
       )}
       <div className="overflow-x-auto">

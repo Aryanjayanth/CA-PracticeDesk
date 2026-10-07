@@ -329,3 +329,5 @@ export function NoAccess() {
     </div>
   );
 }
+
+export { ClientSelect, type ClientOption, type ClientSelectProps } from "./ClientSelect";

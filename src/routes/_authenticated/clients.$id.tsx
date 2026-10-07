@@ -20,6 +20,8 @@ import { StatusBadge } from "@/components/app/StatusBadge";
 import { ClientForm } from "@/components/app/ClientForm";
 import { EntityAvatar } from "@/components/app/EntityAvatar";
 import { useProfiles, useRoles } from "@/hooks/use-roles";
+import { usePermissions } from "@/hooks/use-permissions";
+import { readList } from "@/lib/supabase-read";
 import { firstDuePreview, monthLabel } from "@/lib/service-options";
 import { cn } from "@/lib/utils";
 import {
@@ -48,6 +50,12 @@ export const Route = createFileRoute("/_authenticated/clients/$id")({
 function ClientProfile() {
   const { id } = Route.useParams();
   const { isFinance, isManager } = useRoles();
+  const { canEdit, canCreate, canView } = usePermissions();
+  const canSeePayments = canView("payments");
+  // Service assignments live on client_services, which answers to either the
+  // Clients or the Recurring module in Postgres, so mirror that here.
+  const canLinkService = canCreate("recurring") || canCreate("clients");
+  const canEditService = canEdit("recurring") || canEdit("clients");
   const { data: profiles } = useProfiles();
   const pname = (u: string | null) =>
     profiles?.find((p) => p.id === u)?.full_name ?? (u ? "Staff" : "System");
@@ -56,28 +64,79 @@ function ClientProfile() {
   const qc = useQueryClient();
 
   const q = useQuery({
-    queryKey: ["client360", id, isFinance, isManager],
+    queryKey: ["client360", id, isFinance, isManager, canSeePayments],
     queryFn: async () => {
       const c = await supabase.from("clients").select("*").eq("id", id).maybeSingle();
       if (c.error) throw c.error;
+      // Both go through RPCs so fee/net_amount arrive blank unless this user
+      // holds the matching "amounts" grant. readList falls back to the current
+      // RLS policies when the permissions migration has not been applied.
       const [cs, jobs] = await Promise.all([
-        supabase
-          .from("client_services")
-          .select("*, services(name, service_type, auto_invoice)")
-          .eq("client_id", id)
-          .order("created_at"),
-        supabase
-          .from("jobs")
-          .select("*, services(name), invoice_items(invoice_id, invoices(id, invoice_no, status))")
-          .eq("client_id", id)
-          .order("created_at", { ascending: false }),
+        readList("client_services_list", { _client_id: id }, async () => {
+          const r = await supabase
+            .from("client_services")
+            .select(
+              "id,client_id,service_id,agreed_fee,frequency,start_date,end_date,due_days,assigned_staff,status,notes,created_at,services(name,service_type,auto_invoice),profiles!client_services_assigned_staff_fkey(full_name)",
+            )
+            .eq("client_id", id)
+            .order("created_at");
+          if (r.error) return { data: null, error: r.error };
+          return {
+            data: (r.data ?? []).map((x) => ({
+              id: x.id,
+              client_id: x.client_id,
+              service_id: x.service_id,
+              service_name: x.services?.name ?? null,
+              service_type: x.services?.service_type ?? null,
+              auto_invoice: x.services?.auto_invoice ?? null,
+              agreed_fee: x.agreed_fee,
+              frequency: x.frequency,
+              start_date: x.start_date,
+              end_date: x.end_date,
+              due_days: x.due_days,
+              assigned_staff: x.assigned_staff,
+              assigned_staff_name: x.profiles?.full_name ?? null,
+              status: x.status,
+              notes: x.notes,
+              created_at: x.created_at,
+            })),
+            error: null,
+          };
+        }),
+        readList("client_jobs_list", { _client_id: id }, async () => {
+          const r = await supabase
+            .from("jobs")
+            .select(
+              "id,job_code,client_id,service_id,title,period_start,period_end,fee,discount,net_amount,due_date,assigned_staff,status,financial_status,notes,auto_invoice,created_at,services(name),profiles!jobs_assigned_staff_fkey(full_name),invoice_items(invoice_id,invoices(id,invoice_no,status))",
+            )
+            .eq("client_id", id)
+            .order("created_at", { ascending: false });
+          if (r.error) return { data: null, error: r.error };
+          return {
+            data: (r.data ?? []).map((j) => {
+              const inv = (
+                j.invoice_items as Array<{
+                  invoice_id: string;
+                  invoices: { id: string; invoice_no: string; status: string } | null;
+                }> | null
+              )?.[0]?.invoices;
+              return {
+                ...j,
+                service_name: j.services?.name ?? null,
+                assigned_staff_name: j.profiles?.full_name ?? null,
+                invoice_id: inv?.id ?? null,
+                invoice_no: inv?.invoice_no ?? null,
+                invoice_status: inv?.status ?? null,
+              };
+            }),
+            error: null,
+          };
+        }),
       ]);
       let invoices: Awaited<ReturnType<typeof fetchInv>> = [];
       let payments: Awaited<ReturnType<typeof fetchPay>> = [];
-      if (isFinance) {
-        invoices = await fetchInv(id);
-        payments = await fetchPay(id);
-      }
+      if (isFinance) invoices = await fetchInv(id);
+      if (isFinance || canSeePayments) payments = await fetchPay(id);
       let activity: {
         id: number;
         action: string;
@@ -90,8 +149,8 @@ function ClientProfile() {
       if (isManager) {
         const ids = [
           id,
-          ...(cs.data ?? []).map((s) => s.id),
-          ...(jobs.data ?? []).map((j) => j.id),
+          ...cs.map((s) => s.id),
+          ...jobs.map((j) => j.id),
           ...invoices.map((i) => i.id),
           ...payments.map((p) => p.id),
         ];
@@ -105,8 +164,8 @@ function ClientProfile() {
       }
       return {
         client: c.data,
-        cs: cs.data ?? [],
-        jobs: jobs.data ?? [],
+        cs,
+        jobs,
         invoices,
         payments,
         activity,
@@ -193,7 +252,7 @@ function ClientProfile() {
             </div>
           </div>
         </div>
-        {isManager && (
+        {canEdit("clients") && (
           <Button variant="outline" onClick={() => setEdit(true)}>
             <Pencil className="mr-1 h-4 w-4" />
             Edit
@@ -209,10 +268,10 @@ function ClientProfile() {
           {isFinance && (
             <>
               <TabsTrigger value="invoices">Invoices</TabsTrigger>
-              <TabsTrigger value="payments">Payments</TabsTrigger>
               <TabsTrigger value="outstanding">Outstanding</TabsTrigger>
             </>
           )}
+          {canSeePayments && <TabsTrigger value="payments">Payments</TabsTrigger>}
           {isManager && <TabsTrigger value="activity">Activity</TabsTrigger>}
         </TabsList>
 
@@ -256,11 +315,15 @@ function ClientProfile() {
                 />
                 <StatCard
                   label="Unallocated"
-                  value={inr(
-                    d.payments
-                      .filter((p) => p.status !== "reversed")
-                      .reduce((s, p) => s + Number(p.amount) - Number(p.allocated_amount), 0),
-                  )}
+                  value={
+                    d.payments.every((p) => p.amount == null)
+                      ? "—"
+                      : inr(
+                          d.payments
+                            .filter((p) => p.status !== "reversed")
+                            .reduce((s, p) => s + Number(p.amount) - Number(p.allocated_amount), 0),
+                        )
+                  }
                   tone="warning"
                 />
               </>
@@ -323,7 +386,7 @@ function ClientProfile() {
             rows={d.cs}
             empty="No services linked to this client."
             toolbar={
-              isManager && (
+              canLinkService && (
                 <Button size="sm" className="ml-auto" onClick={() => setLink(true)}>
                   <Plus className="mr-1 h-4 w-4" />
                   Link Service
@@ -334,14 +397,14 @@ function ClientProfile() {
               {
                 key: "s",
                 header: "Service",
-                render: (r) => <span className="font-medium">{r.services?.name}</span>,
+                render: (r) => <span className="font-medium">{r.service_name}</span>,
               },
               { key: "f", header: "Frequency", render: (r) => FREQS[r.frequency] },
               {
                 key: "fee",
                 header: "Agreed Fee",
                 align: "right",
-                render: (r) => inr(r.agreed_fee),
+                render: (r) => (r.agreed_fee == null ? "—" : inr(r.agreed_fee)),
               },
               { key: "sd", header: "Start", render: (r) => fmtDate(r.start_date) },
               { key: "ed", header: "End", render: (r) => fmtDate(r.end_date) },
@@ -350,11 +413,11 @@ function ClientProfile() {
                 key: "ai",
                 header: "Auto-Invoice",
                 render: (r) =>
-                  isManager ? (
+                  canEditService ? (
                     <div className="flex items-center justify-center">
                       <button
                         type="button"
-                        onClick={() => toggleCsAutoInvoice(r.id, r.auto_invoice)}
+                        onClick={() => toggleCsAutoInvoice(r.id, !!r.auto_invoice)}
                         className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${r.auto_invoice ? "bg-primary" : "bg-muted-foreground/30"}`}
                         title={
                           r.auto_invoice
@@ -380,7 +443,7 @@ function ClientProfile() {
                 key: "a",
                 header: "",
                 render: (r) =>
-                  isManager && (
+                  canEditService && (
                     <div className="flex gap-1">
                       {r.status === "active" ? (
                         <Button size="sm" variant="ghost" onClick={() => toggleCs(r.id, "paused")}>
@@ -438,7 +501,7 @@ function ClientProfile() {
                 key: "net",
                 header: "Net",
                 align: "right",
-                render: (j) => (isFinance ? inr(j.net_amount) : "—"),
+                render: (j) => (j.net_amount == null ? "—" : inr(j.net_amount)),
               },
               {
                 key: "st",
@@ -449,28 +512,24 @@ function ClientProfile() {
                 key: "fs",
                 header: "Billing",
                 render: (j) => {
-                  const inv = (
-                    j.invoice_items as Array<{
-                      invoice_id: string;
-                      invoices: { id: string; invoice_no: string; status: string } | null;
-                    }> | null
-                  )?.[0]?.invoices;
-                  if (inv) {
+                  if (j.invoice_id && j.invoice_no) {
                     return (
                       <Link
                         to="/invoices/$id"
-                        params={{ id: inv.id }}
+                        params={{ id: j.invoice_id }}
                         className="group inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium bg-muted/60 hover:bg-muted border border-border/50 transition-colors"
-                        title={`Click to open Invoice ${inv.invoice_no}`}
+                        title={`Click to open Invoice ${j.invoice_no}`}
                         onClick={(e) => e.stopPropagation()}
                       >
                         <StatusBadge
                           status={
-                            j.financial_status === "closed" ? "paid" : inv.status || "invoiced"
+                            j.financial_status === "closed"
+                              ? "paid"
+                              : j.invoice_status || "invoiced"
                           }
                         />
                         <span className="font-mono text-[11px] text-primary underline underline-offset-2 group-hover:text-primary/80">
-                          {inv.invoice_no}
+                          {j.invoice_no}
                         </span>
                       </Link>
                     );
@@ -499,26 +558,6 @@ function ClientProfile() {
             <TabsContent value="invoices" className="mt-4">
               <InvTable rows={d.invoices} />
             </TabsContent>
-            <TabsContent value="payments" className="mt-4">
-              <DataTable
-                rows={d.payments}
-                empty="No payments from this client."
-                columns={[
-                  { key: "payment_code", header: "Payment", className: "font-mono text-xs" },
-                  { key: "d", header: "Date", render: (p) => fmtDate(p.payment_date) },
-                  { key: "m", header: "Mode", render: (p) => MODES[p.mode] },
-                  { key: "reference", header: "Reference" },
-                  { key: "a", header: "Amount", align: "right", render: (p) => inr(p.amount) },
-                  {
-                    key: "al",
-                    header: "Allocated",
-                    align: "right",
-                    render: (p) => inr(p.allocated_amount),
-                  },
-                  { key: "s", header: "Status", render: (p) => <StatusBadge status={p.status} /> },
-                ]}
-              />
-            </TabsContent>
             <TabsContent value="outstanding" className="mt-4">
               <InvTable rows={out} empty="Nothing outstanding — all settled." />
               {out.length > 0 && (
@@ -528,6 +567,34 @@ function ClientProfile() {
               )}
             </TabsContent>
           </>
+        )}
+
+        {canSeePayments && (
+          <TabsContent value="payments" className="mt-4">
+            <DataTable
+              rows={d.payments}
+              empty="No payments from this client."
+              columns={[
+                { key: "payment_code", header: "Payment", className: "font-mono text-xs" },
+                { key: "d", header: "Date", render: (p) => fmtDate(p.payment_date) },
+                { key: "m", header: "Mode", render: (p) => MODES[p.mode] },
+                { key: "reference", header: "Reference" },
+                {
+                  key: "a",
+                  header: "Amount",
+                  align: "right",
+                  render: (p) => (p.amount == null ? "—" : inr(p.amount)),
+                },
+                {
+                  key: "al",
+                  header: "Allocated",
+                  align: "right",
+                  render: (p) => (p.allocated_amount == null ? "—" : inr(p.allocated_amount)),
+                },
+                { key: "s", header: "Status", render: (p) => <StatusBadge status={p.status} /> },
+              ]}
+            />
+          </TabsContent>
         )}
 
         {isManager && (
@@ -604,15 +671,20 @@ const fetchInv = async (id: string) => {
   if (error) throw error;
   return data;
 };
-const fetchPay = async (id: string) => {
-  const { data, error } = await supabase
-    .from("payments")
-    .select("*")
-    .eq("client_id", id)
-    .order("payment_date", { ascending: false });
-  if (error) throw error;
-  return data;
-};
+// Via the RPC so `amount` arrives blank unless the caller holds the payments
+// amounts grant; reading the table directly would ship every figure.
+const fetchPay = async (id: string) =>
+  readList("client_payments_list", { _client_id: id }, async () => {
+    const r = await supabase
+      .from("payments")
+      .select(
+        "id,payment_code,client_id,job_id,amount,allocated_amount,mode,payment_date,reference,narration,status,created_at",
+      )
+      .eq("client_id", id)
+      .order("payment_date", { ascending: false });
+    if (r.error) return { data: null, error: r.error };
+    return { data: r.data ?? [], error: null };
+  });
 
 function InvTable({
   rows,

@@ -65,8 +65,8 @@ const schema = z.object({
     .trim()
     .toUpperCase()
     .regex(
-      /^[A-Z]{5}[0-9]{4}[A-Z]$/,
-      "PAN must be 10 characters in valid format: 5 letters, 4 numbers, 1 letter (e.g. ABCDE1234F)",
+      /^([A-Z]{5}[0-9]{4}[A-Z])?$/,
+      "PAN must be 10 characters in valid format: 5 letters, 4 numbers, 1 letter (e.g. ABCDE1234F), or leave blank",
     ),
   tan: z
     .string()
@@ -360,17 +360,10 @@ export function ClientForm({
       </Section>
 
       {/* 3 — Tax identifiers */}
-      <Section title="Tax Identifiers" hint="PAN is mandatory; TAN and GSTIN apply where relevant.">
+      <Section title="Tax Identifiers" hint="PAN, TAN and GSTIN apply where relevant.">
         <div className="grid gap-4 sm:grid-cols-3">
-          <Field
-            label={
-              <>
-                PAN <Req />
-              </>
-            }
-          >
+          <Field label="PAN" hint="Optional">
             <Input
-              required
               value={f.pan}
               onChange={set("pan")}
               className="uppercase font-mono"

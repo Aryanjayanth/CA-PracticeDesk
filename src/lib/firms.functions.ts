@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
-const roleEnum = z.enum(["owner", "admin", "accountant", "staff", "cashier"]);
+const roleEnum = z.enum(["admin", "staff", "cashier"]);
 
 const inviteSchema = z.object({
   firmId: z.string().uuid(),
@@ -79,13 +79,6 @@ export const inviteUser = createServerFn({ method: "POST" })
         sb.rpc("current_firm_id"),
       ]);
       if (!mgr || firm !== data.firmId) throw new Error("Not authorised");
-      if (data.role === "owner") {
-        const { data: own } = await sb.rpc("has_role", {
-          _user_id: context.userId,
-          _role: "owner",
-        });
-        if (!own) throw new Error("Only an Owner can invite another Owner");
-      }
     }
     return doInvite(data);
   });
@@ -121,7 +114,7 @@ export const createFirm = createServerFn({ method: "POST" })
       firmId: firmId as string,
       email: data.ownerEmail,
       fullName: data.ownerName,
-      role: "owner",
+      role: "admin",
       redirectTo: data.redirectTo,
     });
     return { firmId: firmId as string, ...r };

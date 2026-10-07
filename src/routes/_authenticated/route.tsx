@@ -8,7 +8,7 @@ import { GlobalSearch } from "@/components/app/GlobalSearch";
 import { UserMenu } from "@/components/app/UserMenu";
 import { FirmSwitcher } from "@/components/app/FirmSwitcher";
 import { useCurrentFirm, useSuperAdmin } from "@/hooks/use-firm";
-import { useRoles } from "@/hooks/use-roles";
+import { usePermissions } from "@/hooks/use-permissions";
 import { useAdminPrivacy } from "@/hooks/use-admin-privacy";
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -29,15 +29,19 @@ function Layout() {
   const { isSuperAdmin, loading: l1 } = useSuperAdmin();
   const { privacyMode, setPrivacyMode } = useAdminPrivacy();
   const firm = useCurrentFirm();
-  const { isFinance } = useRoles();
+  const { canEdit } = usePermissions();
   const qc = useQueryClient();
   const path = useRouterState({ select: (r) => r.location.pathname });
   const noFirm = !l1 && !firm.isLoading && !firm.data && path !== "/admin";
+  // pg_cron already generates these for every active firm; this only covers a
+  // firm created after the last cron tick. Gated on the same Edit permission so
+  // a Cashier's browser never attempts it.
+  const mayGenerate = canEdit("recurring");
 
   // Auto-generate due recurring jobs once per firm per day
   useEffect(() => {
     const fid = firm.data?.id;
-    if (!fid || !isFinance) return;
+    if (!fid || !mayGenerate) return;
     const key = `recurring-run-${fid}-${today()}`;
     if (localStorage.getItem(key)) return;
     localStorage.setItem(key, "1");
@@ -47,7 +51,7 @@ function Layout() {
         qc.invalidateQueries();
       }
     });
-  }, [firm.data?.id, isFinance, qc]);
+  }, [firm.data?.id, mayGenerate, qc]);
 
   return (
     <SidebarProvider>
@@ -98,7 +102,7 @@ function Layout() {
                   <>
                     <h2 className="text-lg font-semibold">No firm access</h2>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      Your account isn't linked to an active firm. Ask your firm owner to invite
+                      Your account isn't linked to an active firm. Ask your firm Admin to invite
                       you.
                     </p>
                   </>

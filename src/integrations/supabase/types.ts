@@ -594,6 +594,7 @@ export type Database = {
           firm_id: string;
           id: string;
           job_id: string | null;
+          kind: "overhead" | "tax" | "reimbursement";
           mode: string;
           notes: string | null;
           paid_to: string | null;
@@ -611,6 +612,7 @@ export type Database = {
           firm_id?: string;
           id?: string;
           job_id?: string | null;
+          kind?: "overhead" | "tax" | "reimbursement";
           mode?: string;
           notes?: string | null;
           paid_to?: string | null;
@@ -628,6 +630,7 @@ export type Database = {
           firm_id?: string;
           id?: string;
           job_id?: string | null;
+          kind?: "overhead" | "tax" | "reimbursement";
           mode?: string;
           notes?: string | null;
           paid_to?: string | null;
@@ -1055,7 +1058,7 @@ export type Database = {
           firm_id: string;
           id: string;
           is_demo: boolean;
-          job_id: string;
+          job_id: string | null;
           mode: string;
           narration: string | null;
           payment_code: string;
@@ -1073,7 +1076,7 @@ export type Database = {
           firm_id?: string;
           id?: string;
           is_demo?: boolean;
-          job_id: string;
+          job_id?: string | null;
           mode: string;
           narration?: string | null;
           payment_code?: string;
@@ -1230,6 +1233,53 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "services_firm_id_fkey";
+            columns: ["firm_id"];
+            isOneToOne: false;
+            referencedRelation: "firms";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      role_permissions: {
+        Row: {
+          can_amounts: boolean;
+          can_create: boolean;
+          can_delete: boolean;
+          can_edit: boolean;
+          can_view: boolean;
+          firm_id: string;
+          module: string;
+          role: Database["public"]["Enums"]["app_role"];
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          can_amounts?: boolean;
+          can_create?: boolean;
+          can_delete?: boolean;
+          can_edit?: boolean;
+          can_view?: boolean;
+          firm_id?: string;
+          module: string;
+          role: Database["public"]["Enums"]["app_role"];
+          updated_at?: string;
+          updated_by?: string | null;
+        };
+        Update: {
+          can_amounts?: boolean;
+          can_create?: boolean;
+          can_delete?: boolean;
+          can_edit?: boolean;
+          can_view?: boolean;
+          firm_id?: string;
+          module?: string;
+          role?: Database["public"]["Enums"]["app_role"];
+          updated_at?: string;
+          updated_by?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "role_permissions_firm_id_fkey";
             columns: ["firm_id"];
             isOneToOne: false;
             referencedRelation: "firms";
@@ -1405,12 +1455,77 @@ export type Database = {
         Args: { _invoice_id: string; _reason: string };
         Returns: undefined;
       };
+      client_jobs_list: {
+        Args: { _client_id: string };
+        Returns: {
+          id: string;
+          job_code: string;
+          client_id: string;
+          service_id: string;
+          service_name: string | null;
+          title: string;
+          period_start: string | null;
+          period_end: string | null;
+          fee: number | null;
+          discount: number | null;
+          net_amount: number | null;
+          due_date: string | null;
+          assigned_staff: string | null;
+          assigned_staff_name: string | null;
+          status: string;
+          financial_status: string;
+          notes: string | null;
+          auto_invoice: boolean;
+          created_at: string;
+          invoice_id: string | null;
+          invoice_no: string | null;
+          invoice_status: string | null;
+        }[];
+      };
       client_lookup: {
         Args: never;
         Returns: {
           client_code: string;
           id: string;
           name: string;
+        }[];
+      };
+      client_payments_list: {
+        Args: { _client_id: string };
+        Returns: {
+          id: string;
+          payment_code: string;
+          client_id: string;
+          job_id: string;
+          amount: number | null;
+          allocated_amount: number | null;
+          mode: string;
+          payment_date: string;
+          reference: string | null;
+          narration: string | null;
+          status: string;
+          created_at: string;
+        }[];
+      };
+      client_services_list: {
+        Args: { _client_id: string };
+        Returns: {
+          id: string;
+          client_id: string;
+          service_id: string;
+          service_name: string | null;
+          service_type: string | null;
+          auto_invoice: boolean | null;
+          agreed_fee: number | null;
+          frequency: string;
+          start_date: string;
+          end_date: string | null;
+          due_days: number;
+          assigned_staff: string | null;
+          assigned_staff_name: string | null;
+          status: string;
+          notes: string | null;
+          created_at: string;
         }[];
       };
       create_firm: {
@@ -1497,10 +1612,97 @@ export type Database = {
         }[];
       };
       generate_recurring_jobs: { Args: { _upto: string }; Returns: number };
+      delete_expense: {
+        Args: { _expense_id: string; _reason: string };
+        Returns: undefined;
+      };
+      expenses_for_job: {
+        Args: { _job_id: string };
+        Returns: {
+          id: string;
+          kind: "overhead" | "tax" | "reimbursement";
+          category: string;
+          description: string;
+          amount: number | null;
+          mode: string;
+          paid_to: string | null;
+          reference: string | null;
+          expense_date: string;
+        }[];
+      };
+      expenses_list: {
+        Args: never;
+        Returns: {
+          id: string;
+          kind: "overhead" | "tax" | "reimbursement";
+          expense_date: string;
+          category: string;
+          description: string;
+          amount: number | null;
+          mode: string;
+          reference: string | null;
+          paid_to: string | null;
+          notes: string | null;
+          client_id: string | null;
+          client_name: string | null;
+          job_id: string | null;
+          job_code: string | null;
+          created_at: string;
+        }[];
+      };
+      jobs_list: {
+        Args: never;
+        Returns: {
+          id: string;
+          job_code: string;
+          client_id: string;
+          client_name: string | null;
+          service_id: string;
+          service_name: string | null;
+          client_service_id: string | null;
+          title: string;
+          period_start: string | null;
+          period_end: string | null;
+          fee: number | null;
+          discount: number | null;
+          net_amount: number | null;
+          due_date: string | null;
+          assigned_staff: string | null;
+          assigned_staff_name: string | null;
+          status: string;
+          financial_status: string;
+          notes: string | null;
+          auto_invoice: boolean;
+          created_at: string;
+          invoice_id: string | null;
+          invoice_no: string | null;
+          invoice_status: string | null;
+        }[];
+      };
+      payments_list: {
+        Args: never;
+        Returns: {
+          id: string;
+          payment_code: string;
+          client_id: string;
+          job_id: string;
+          amount: number | null;
+          mode: string;
+          payment_date: string;
+          reference: string | null;
+          narration: string | null;
+          status: string;
+          created_at: string;
+        }[];
+      };
       generate_recurring_jobs_all: { Args: never; Returns: number };
       generate_recurring_jobs_for_firm: {
         Args: { _firm: string; _upto: string };
         Returns: number;
+      };
+      has_capability: {
+        Args: { _action: string; _module: string };
+        Returns: boolean;
       };
       has_role: {
         Args: {
@@ -1514,12 +1716,48 @@ export type Database = {
       is_manager: { Args: never; Returns: boolean };
       is_staff_plus: { Args: never; Returns: boolean };
       is_super_admin: { Args: never; Returns: boolean };
+      my_permissions: { Args: never; Returns: Json };
       my_roles: {
         Args: never;
         Returns: Database["public"]["Enums"]["app_role"][];
       };
+      permission_matrix: {
+        Args: never;
+        Returns: {
+          role: Database["public"]["Enums"]["app_role"];
+          module: string;
+          can_view: boolean;
+          can_create: boolean;
+          can_edit: boolean;
+          can_delete: boolean;
+          can_amounts: boolean;
+          editable: boolean;
+        }[];
+      };
       recalc_invoice: { Args: { _id: string }; Returns: undefined };
       recalc_payment: { Args: { _id: string }; Returns: undefined };
+      recurring_list: {
+        Args: never;
+        Returns: {
+          id: string;
+          client_id: string;
+          client_name: string | null;
+          service_id: string;
+          service_name: string | null;
+          agreed_fee: number | null;
+          frequency: string;
+          start_date: string;
+          end_date: string | null;
+          due_days: number;
+          assigned_staff: string | null;
+          assigned_staff_name: string | null;
+          status: string;
+          notes: string | null;
+          auto_invoice: boolean;
+          created_at: string;
+        }[];
+      };
+      reset_role_permissions: { Args: never; Returns: undefined };
       reverse_allocation: {
         Args: { _allocation_id: string; _reason: string };
         Returns: undefined;
@@ -1529,13 +1767,25 @@ export type Database = {
         Returns: undefined;
       };
       set_acting_firm: { Args: { _firm_id: string }; Returns: undefined };
+      set_role_permission: {
+        Args: {
+          _amounts: boolean;
+          _create: boolean;
+          _delete: boolean;
+          _edit: boolean;
+          _module: string;
+          _role: Database["public"]["Enums"]["app_role"];
+          _view: boolean;
+        };
+        Returns: undefined;
+      };
       update_job_status: {
         Args: { _job_id: string; _reason: string; _status: string };
         Returns: undefined;
       };
     };
     Enums: {
-      app_role: "owner" | "admin" | "accountant" | "staff" | "cashier";
+      app_role: "admin" | "staff" | "cashier";
     };
     CompositeTypes: {
       [_ in never]: never;
@@ -1657,7 +1907,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      app_role: ["owner", "admin", "accountant", "staff", "cashier"],
+      app_role: ["admin", "staff", "cashier"],
     },
   },
 } as const;

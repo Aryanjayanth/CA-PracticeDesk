@@ -15,6 +15,7 @@ import {
 } from "recharts";
 import { supabase } from "@/integrations/supabase/client";
 import { useRoles } from "@/hooks/use-roles";
+import { usePermissions } from "@/hooks/use-permissions";
 import { PageHeader, StatCard } from "@/components/app/common";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -47,7 +48,8 @@ const COLORS = [
 ];
 
 function Dashboard() {
-  const { isFinance, isCashierOnly, loading, has } = useRoles();
+  const { isFinance, loading } = useRoles();
+  const { canView } = usePermissions();
   const q = useQuery({
     queryKey: ["dashboard"],
     enabled: isFinance,
@@ -82,9 +84,19 @@ function Dashboard() {
     },
   });
 
+  // The dashboard is entirely financial figures, so it stays Admin-only. Anyone
+  // else lands on the first module their permissions actually open.
   if (loading) return null;
-  if (isCashierOnly) return <Navigate to="/payments" />;
-  if (!isFinance && has("staff")) return <Navigate to="/jobs" />;
+  if (!isFinance) {
+    const landing = canView("payments")
+      ? "/payments"
+      : canView("jobs")
+        ? "/jobs"
+        : canView("clients")
+          ? "/clients"
+          : "/roles";
+    return <Navigate to={landing} />;
+  }
 
   const d = q.data;
   const jobs = d?.jobs ?? [];

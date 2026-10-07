@@ -5,7 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DataTable } from "@/components/app/DataTable";
 import { NoAccess, PageHeader } from "@/components/app/common";
-import { useRoles, type Role } from "@/hooks/use-roles";
+import { useRoles, ROLES, type Role } from "@/hooks/use-roles";
 import { errMsg, fmtDate, label } from "@/lib/format";
 import { useState } from "react";
 import { UserPlus } from "lucide-react";
@@ -23,10 +23,8 @@ export const Route = createFileRoute("/_authenticated/users")({
   component: UsersPage,
 });
 
-const ALL: Role[] = ["owner", "admin", "accountant", "staff", "cashier"];
-
 function UsersPage() {
-  const { isManager, has, loading } = useRoles();
+  const { isManager, loading } = useRoles();
   const { data: firm } = useCurrentFirm();
   const [invite, setInvite] = useState(false);
   const qc = useQueryClient();
@@ -47,15 +45,8 @@ function UsersPage() {
   });
   if (loading) return null;
   if (!isManager) return <NoAccess />;
-  const isOwner = has("owner");
 
   const toggle = async (userId: string, role: Role, on: boolean) => {
-    if (
-      !on &&
-      role === "owner" &&
-      (q.data ?? []).filter((u) => u.roles.includes("owner")).length <= 1
-    )
-      return toast.error("At least one Owner is required");
     const { error } = on
       ? await supabase.from("user_roles").insert({ user_id: userId, role })
       : await supabase.from("user_roles").delete().eq("user_id", userId).eq("role", role);
@@ -68,7 +59,7 @@ function UsersPage() {
     <div className="mx-auto max-w-6xl">
       <PageHeader
         title="Users"
-        subtitle="Invite team members by email and assign their roles."
+        subtitle="Invite team members by email and give them a role. What each role may do is set under Roles & Permissions."
         actions={
           <Button onClick={() => setInvite(true)}>
             <UserPlus className="mr-1 h-4 w-4" />
@@ -79,13 +70,19 @@ function UsersPage() {
       <InviteDialog
         firm={invite && firm ? { id: firm.id, name: firm.name } : null}
         onClose={() => setInvite(false)}
-        allowOwner={isOwner}
       />
       <DataTable
         rows={q.data}
         loading={q.isLoading}
         empty="No users yet."
         search={(u) => `${u.full_name} ${u.email}`}
+        exportFilename="team_users"
+        exportTransform={(u) => ({
+          "Name": u.full_name,
+          "Email": u.email,
+          "Joined Date": fmtDate(u.created_at),
+          "Roles": u.roles.join(", "),
+        })}
         columns={[
           {
             key: "full_name",
@@ -94,13 +91,12 @@ function UsersPage() {
           },
           { key: "email", header: "Email" },
           { key: "c", header: "Joined", render: (u) => fmtDate(u.created_at) },
-          ...ALL.map((r) => ({
+          ...ROLES.map((r) => ({
             key: r,
             header: label(r),
             render: (u: { id: string; roles: Role[] }) => (
               <Checkbox
                 checked={u.roles.includes(r)}
-                disabled={r === "owner" && !isOwner}
                 onCheckedChange={(c) => toggle(u.id, r, !!c)}
               />
             ),

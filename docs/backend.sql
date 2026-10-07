@@ -144,7 +144,7 @@ create index on public.client_services(client_id);
 
 create table public.jobs (
   id uuid primary key default gen_random_uuid(),
-  job_code text not null unique default ('JB' || lpad(nextval('public.job_seq')::text,5,'0')),
+  job_code text not null,
   client_id uuid not null references public.clients(id) on delete restrict,
   service_id uuid not null references public.services(id) on delete restrict,
   client_service_id uuid references public.client_services(id) on delete restrict,
@@ -175,7 +175,7 @@ create index on public.job_status_history(job_id);
 
 create table public.invoices (
   id uuid primary key default gen_random_uuid(),
-  invoice_no text not null unique default ('INV-' || lpad(nextval('public.invoice_seq')::text,5,'0')),
+  invoice_no text not null,
   client_id uuid not null references public.clients(id) on delete restrict,
   invoice_date date not null default current_date,
   due_date date not null default (current_date + 15),
@@ -216,7 +216,7 @@ create table public.discounts (
 
 create table public.payments (
   id uuid primary key default gen_random_uuid(),
-  payment_code text not null unique default ('PAY' || lpad(nextval('public.payment_seq')::text,5,'0')),
+  payment_code text not null,
   client_id uuid not null references public.clients(id) on delete restrict,
   amount numeric(14,2) not null check (amount > 0),
   mode text not null check (mode in ('cash','bank','upi','cheque','card','other')),
@@ -1148,6 +1148,576 @@ GRANT EXECUTE ON FUNCTION public.auto_invoice_job(uuid) TO authenticated;
    Phase 1 -- Job-centric workflow: JOB -> PAYMENT -> CLEARING -> SQUARE-OFF -> INVOICE
    Invoice creation is impossible until the job's payment clearing is squared
    off. Enforcement lives in Postgres; the UI only reflects it.
+   References become JOB-XXXX-MMYY / PAY-XXXX-MMYY / INV-XXXX-MMYY, superseded by the doc_numbering migration appended at the end of this file.
+   Paste-safe: no line comments and no blank lines, because the Supabase SQL
+   editor strips newlines and would otherwise swallow the rest of the script.
+   ========================================================================== */
+alter table public.jobs alter column job_code drop default;
+alter table public.payments alter column payment_code drop default;
+alter table public.invoices alter column invoice_no drop default;
+alter table public.jobs add column if not exists checklist jsonb not null default '[]'::jsonb;
+alter table public.jobs add column if not exists completed_at timestamptz;
+create or replace function public.stamp_job_completion() returns trigger language plpgsql as $$
+begin
+  if new.status = 'completed' then
+    if tg_op = 'INSERT' then
+      new.completed_at := coalesce(new.completed_at, now());
+    elsif old.status is distinct from 'completed' then
+      new.completed_at := coalesce(new.completed_at, now());
+    end if;
+  else
+    new.completed_at := null;
+  end if;
+  return new;
+end $$;
+drop trigger if exists jobs_stamp_completion on public.jobs;
+create trigger jobs_stamp_completion before insert or update on public.jobs for each row execute function public.stamp_job_completion();
+create table if not exists public.job_clearing (
+  id uuid primary key default gen_random_uuid(),
+  job_id uuid not null references public.jobs(id) on delete restrict,
+  firm_id uuid not null default public.current_firm_id() references public.firms(id) on delete cascade,
+  advance numeric(14,2) not null default 0 check (advance >= 0),
+  tds_tcs numeric(14,2) not null default 0 check (tds_tcs >= 0),
+  discount numeric(14,2) not null default 0 check (discount >= 0),
+  other_deduction numeric(14,2) not null default 0 check (other_deduction >= 0),
+  other_addition numeric(14,2) not null default 0 check (other_addition >= 0),
+  gross_fee numeric(14,2) not null default 0,
+  final_amount numeric(14,2) not null default 0 check (final_amount >= 0),
+  status text not null default 'draft' check (status in ('draft','cleared','squared_off')),
+  cleared_at timestamptz, cleared_by uuid references public.profiles(id),
+  squared_off_at timestamptz, squared_off_by uuid references public.profiles(id),
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (job_id)
+);
+create index if not exists job_clearing_firm_idx on public.job_clearing(firm_id);
+create or replace function public.job_clearing_recalc() returns trigger language plpgsql as $$
+declare j record;
+begin
+  select fee, discount into j from public.jobs where id = new.job_id;
+  new.gross_fee := coalesce(j.fee, 0);
+  new.final_amount := greatest(new.gross_fee - coalesce(j.discount, 0) - new.advance - new.tds_tcs - new.discount - new.other_deduction + new.other_addition, 0);
+  new.updated_at := now();
+  return new;
+end $$;
+drop trigger if exists job_clearing_recalc_trg on public.job_clearing;
+create trigger job_clearing_recalc_trg before insert or update on public.job_clearing for each row execute function public.job_clearing_recalc();
+alter table public.job_clearing enable row level security;
+drop policy if exists "job_clearing read" on public.job_clearing;
+create policy "job_clearing read" on public.job_clearing for select to authenticated using (public.is_finance() or public.is_manager());
+drop policy if exists "job_clearing write" on public.job_clearing;
+create policy "job_clearing write" on public.job_clearing for all to authenticated using (public.is_finance()) with check (public.is_finance());
+alter table public.payments alter column job_id set not null;
+alter table public.invoices add column if not exists job_id uuid references public.jobs(id) on delete restrict;
+alter table public.invoices add column if not exists payment_id uuid references public.payments(id) on delete restrict;
+create index if not exists invoices_job_idx on public.invoices(job_id);
+create index if not exists payments_job_idx on public.payments(job_id);
+create unique index if not exists invoices_one_per_job on public.invoices(job_id) where job_id is not null and status <> 'cancelled';
+drop policy if exists "pay ins" on public.payments;
+create policy "pay ins" on public.payments for insert to authenticated with check ((public.is_finance() or public.is_cashier()) and created_by = auth.uid());
+create table if not exists public.expenses (
+  id uuid primary key default gen_random_uuid(),
+  firm_id uuid not null default public.current_firm_id() references public.firms(id) on delete cascade,
+  client_id uuid references public.clients(id) on delete restrict,
+  job_id uuid references public.jobs(id) on delete restrict,
+  expense_date date not null default current_date,
+  category text not null default 'Other',
+  description text not null,
+  amount numeric(14,2) not null check (amount > 0),
+  mode text not null default 'other' check (mode in ('cash','bank','upi','cheque','card','other')),
+  reference text, paid_to text, notes text,
+  created_by uuid default auth.uid(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists expenses_firm_idx on public.expenses(firm_id);
+create index if not exists expenses_client_idx on public.expenses(client_id);
+create index if not exists expenses_job_idx on public.expenses(job_id);
+alter table public.expenses enable row level security;
+drop policy if exists "expenses read" on public.expenses;
+create policy "expenses read" on public.expenses for select to authenticated using (public.is_staff_plus());
+drop policy if exists "expenses write" on public.expenses;
+create policy "expenses write" on public.expenses for all to authenticated using (public.is_finance()) with check (public.is_finance());
+create table if not exists public.job_conditions (
+  id uuid primary key default gen_random_uuid(),
+  firm_id uuid not null default public.current_firm_id() references public.firms(id) on delete cascade,
+  code text not null,
+  label text not null,
+  description text,
+  severity text not null default 'block' check (severity in ('block','warn')),
+  enabled boolean not null default true,
+  sort_order int not null default 100,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (firm_id, code)
+);
+create index if not exists job_conditions_firm_idx on public.job_conditions(firm_id);
+alter table public.job_conditions enable row level security;
+drop policy if exists "job_conditions read" on public.job_conditions;
+create policy "job_conditions read" on public.job_conditions for select to authenticated using (true);
+drop policy if exists "job_conditions write" on public.job_conditions;
+create policy "job_conditions write" on public.job_conditions for all to authenticated using (public.is_manager()) with check (public.is_manager());
+create table if not exists public.recurring_payments (
+  id uuid primary key default gen_random_uuid(),
+  firm_id uuid not null default public.current_firm_id() references public.firms(id) on delete cascade,
+  client_id uuid not null references public.clients(id) on delete restrict,
+  job_id uuid references public.jobs(id) on delete restrict,
+  label text not null,
+  amount numeric(14,2) not null check (amount > 0),
+  mode text not null default 'bank' check (mode in ('cash','bank','upi','cheque','card','other')),
+  frequency text not null check (frequency in ('monthly','quarterly','half_yearly','yearly')),
+  next_run_date date not null default current_date,
+  last_run_at timestamptz,
+  status text not null default 'active' check (status in ('active','paused','stopped')),
+  reference text, notes text,
+  created_by uuid default auth.uid(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists recurring_payments_firm_idx on public.recurring_payments(firm_id);
+alter table public.recurring_payments enable row level security;
+drop policy if exists "recurring_payments read" on public.recurring_payments;
+create policy "recurring_payments read" on public.recurring_payments for select to authenticated using (public.is_finance());
+drop policy if exists "recurring_payments write" on public.recurring_payments;
+create policy "recurring_payments write" on public.recurring_payments for all to authenticated using (public.is_manager()) with check (public.is_manager());
+do $$ declare t text; begin
+  foreach t in array array['job_clearing','expenses','job_conditions','recurring_payments'] loop
+    execute format('create policy "firm isolation" on public.%I as restrictive for all to authenticated using (firm_id = public.current_firm_id()) with check (firm_id = public.current_firm_id())', t);
+    execute format('create trigger audit_%1$s after insert or update or delete on public.%1$s for each row execute function public.audit_trigger()', t);
+  end loop;
+end $$;
+revoke execute on function public.auto_invoice_job(uuid) from public, anon, authenticated;
+create or replace function public.update_job_status(_job_id uuid, _status text, _reason text) returns void language plpgsql security definer set search_path=public as $$
+begin
+  perform public.firm_guard('jobs', _job_id);
+  if not (public.is_finance() or exists(select 1 from public.jobs where id=_job_id and assigned_staff=auth.uid())) then raise exception 'Not authorised'; end if;
+  perform set_config('app.status_reason', coalesce(_reason,''), true);
+  update public.jobs set status=_status where id=_job_id;
+end $$;
+create or replace function public.assert_invoice_eligible(_job_id uuid) returns void language plpgsql security definer set search_path=public as $$
+declare j record; c record; inv record;
+begin
+  select * into j from public.jobs where id = _job_id;
+  if j.id is null then raise exception 'Job not found'; end if;
+  if j.status = 'cancelled' then raise exception 'Job % is cancelled', j.job_code; end if;
+  select * into inv from public.invoices where job_id = _job_id and status <> 'cancelled' limit 1;
+  if inv.id is not null then raise exception 'Job % is already invoiced as %', j.job_code, inv.invoice_no; end if;
+  if j.status <> 'completed' then raise exception 'Job % must be completed before invoicing', j.job_code; end if;
+  select * into c from public.job_clearing where job_id = _job_id;
+  if c.id is null then raise exception 'Invoice cannot be created until payment clearing is completed.'; end if;
+  if c.status = 'draft' then raise exception 'Invoice cannot be created until payment clearing is completed.'; end if;
+  if c.status = 'cleared' then raise exception 'Invoice cannot be created until payment is squared off.'; end if;
+  if c.final_amount <= 0 then raise exception 'Cleared amount for job % must be greater than zero', j.job_code; end if;
+  return;
+end $$;
+create or replace function public.create_invoice(_client_id uuid, _job_ids uuid[], _invoice_date date, _due_date date, _discount numeric, _discount_reason text, _tax_rate numeric, _notes text, _extra_desc text, _extra_amount numeric) returns uuid language plpgsql security definer set search_path=public as $$
+declare inv_id uuid; sub numeric := 0; j record; tax numeric; tot numeric; amt numeric;
+begin
+  if not public.is_finance() then raise exception 'Not authorised'; end if;
+  perform public.firm_guard('clients', _client_id);
+  insert into public.invoices(client_id, invoice_date, due_date, notes, created_by) values (_client_id, _invoice_date, _due_date, _notes, auth.uid()) returning id into inv_id;
+  for j in select * from public.jobs where id = any(coalesce(_job_ids,'{}'::uuid[])) loop
+    if j.client_id <> _client_id then raise exception 'Job % belongs to another client', j.job_code; end if;
+    perform public.assert_invoice_eligible(j.id);
+    select coalesce((select c.final_amount from public.job_clearing c where c.job_id=j.id), j.net_amount) into amt;
+    insert into public.invoice_items(invoice_id, job_id, description, amount) values (inv_id, j.id, j.title, amt);
+    update public.invoices set job_id = j.id where id = inv_id and job_id is null;
+    sub := sub + amt;
+  end loop;
+  if coalesce(_extra_amount,0) > 0 then
+    insert into public.invoice_items(invoice_id, description, amount) values (inv_id, coalesce(nullif(_extra_desc,''),'Professional fees'), _extra_amount);
+    sub := sub + _extra_amount;
+  end if;
+  if sub <= 0 then raise exception 'Invoice must have at least one item'; end if;
+  if coalesce(_discount,0) > sub then raise exception 'Discount cannot exceed subtotal'; end if;
+  tax := round((sub - coalesce(_discount,0)) * coalesce(_tax_rate,0) / 100, 2);
+  tot := sub - coalesce(_discount,0) + tax;
+  update public.invoices set subtotal=sub, discount=coalesce(_discount,0), tax_rate=coalesce(_tax_rate,0), tax_amount=tax, total=tot, description=(select string_agg(description, ', ') from public.invoice_items where invoice_id=inv_id) where id=inv_id;
+  if coalesce(_discount,0) > 0 then
+    insert into public.discounts(invoice_id, original_amount, discount_amount, net_amount, reason, approved_by) values (inv_id, sub, _discount, sub-_discount, _discount_reason, auth.uid());
+  end if;
+  update public.jobs set financial_status='invoiced' where id = any(coalesce(_job_ids,'{}'));
+  insert into public.audit_logs(user_id, action, module, record_id, reason) values (auth.uid(), 'invoice_created', 'invoices', inv_id, 'legacy multi-job path');
+  return inv_id;
+end $$;
+create or replace function public.create_invoice_for_job(_job_id uuid, _payment_id uuid, _invoice_date date, _due_date date, _tax_rate numeric, _notes text, _extra_desc text, _extra_amount numeric) returns uuid language plpgsql security definer set search_path=public as $$
+declare j record; c record; inv_id uuid; sub numeric; tax numeric; tot numeric;
+begin
+  if not public.is_finance() then raise exception 'Not authorised'; end if;
+  perform public.firm_guard('jobs', _job_id);
+  perform public.assert_invoice_eligible(_job_id);
+  select * into j from public.jobs where id = _job_id;
+  select * into c from public.job_clearing where job_id = _job_id;
+  if _payment_id is not null then
+    perform public.firm_guard('payments', _payment_id);
+    if not exists(select 1 from public.payments where id = _payment_id and job_id = _job_id) then raise exception 'Payment does not belong to job %', j.job_code; end if;
+  end if;
+  sub := c.final_amount + coalesce(_extra_amount, 0);
+  if sub <= 0 then raise exception 'Invoice must have at least one item'; end if;
+  tax := round(sub * coalesce(_tax_rate, 0) / 100, 2);
+  tot := sub + tax;
+  insert into public.invoices(client_id, job_id, payment_id, invoice_date, due_date, notes, created_by) values (j.client_id, _job_id, _payment_id, coalesce(_invoice_date, current_date), coalesce(_due_date, current_date + 15), _notes, auth.uid()) returning id into inv_id;
+  insert into public.invoice_items(invoice_id, job_id, description, amount) values (inv_id, _job_id, j.title, c.final_amount);
+  if coalesce(_extra_amount,0) > 0 then
+    insert into public.invoice_items(invoice_id, description, amount) values (inv_id, coalesce(nullif(_extra_desc,''),'Professional fees'), _extra_amount);
+  end if;
+  update public.invoices set subtotal=sub, tax_rate=coalesce(_tax_rate,0), tax_amount=tax, total=tot, description=(select string_agg(description, ', ') from public.invoice_items where invoice_id=inv_id) where id=inv_id;
+  update public.jobs set financial_status='invoiced' where id=_job_id;
+  insert into public.audit_logs(user_id, action, module, record_id, reason) values (auth.uid(), 'invoice_created', 'invoices', inv_id, j.job_code);
+  return inv_id;
+end $$;
+create or replace function public.save_job_clearing(_job_id uuid, _advance numeric, _tds_tcs numeric, _discount numeric, _other_deduction numeric, _other_addition numeric, _notes text) returns uuid language plpgsql security definer set search_path=public as $$
+declare cid uuid;
+begin
+  if not public.is_finance() then raise exception 'Not authorised'; end if;
+  perform public.firm_guard('jobs', _job_id);
+  if exists(select 1 from public.job_clearing where job_id=_job_id and status<>'draft') then raise exception 'Clearing has already been completed and cannot be edited. Reverse it first.'; end if;
+  insert into public.job_clearing(job_id, advance, tds_tcs, discount, other_deduction, other_addition, notes)
+  values (_job_id, coalesce(_advance,0), coalesce(_tds_tcs,0), coalesce(_discount,0), coalesce(_other_deduction,0), coalesce(_other_addition,0), _notes)
+  on conflict (job_id) do update set advance=excluded.advance, tds_tcs=excluded.tds_tcs, discount=excluded.discount, other_deduction=excluded.other_deduction, other_addition=excluded.other_addition, notes=excluded.notes
+  returning id into cid;
+  insert into public.audit_logs(user_id, action, module, record_id, reason) values (auth.uid(), 'clearing_saved', 'job_clearing', cid, _job_id::text);
+  return cid;
+end $$;
+create or replace function public.mark_job_cleared(_job_id uuid, _notes text) returns void language plpgsql security definer set search_path=public as $$
+declare cid uuid;
+begin
+  if not public.is_finance() then raise exception 'Not authorised'; end if;
+  perform public.firm_guard('jobs', _job_id);
+  update public.job_clearing set status='cleared', cleared_at=now(), cleared_by=auth.uid(), notes=coalesce(_notes, notes) where job_id=_job_id returning id into cid;
+  if cid is null then raise exception 'Save the clearing details before clearing the payment.'; end if;
+  insert into public.audit_logs(user_id, action, module, record_id, reason) values (auth.uid(), 'payment_cleared', 'job_clearing', cid, _job_id::text);
+end $$;
+create or replace function public.sq_off_job_clearing(_job_id uuid, _notes text) returns void language plpgsql security definer set search_path=public as $$
+declare cid uuid; jc record;
+begin
+  if not public.is_finance() then raise exception 'Not authorised'; end if;
+  perform public.firm_guard('jobs', _job_id);
+  select * into jc from public.job_clearing where job_id=_job_id;
+  if jc.id is null then raise exception 'Save the clearing details before squaring off.'; end if;
+  if jc.status = 'draft' then raise exception 'Invoice cannot be created until payment clearing is completed.'; end if;
+  if jc.status = 'squared_off' then raise exception 'Payment is already squared off.'; end if;
+  update public.job_clearing set status='squared_off', squared_off_at=now(), squared_off_by=auth.uid(), notes=coalesce(_notes, notes) where id=jc.id returning id into cid;
+  insert into public.audit_logs(user_id, action, module, record_id, reason) values (auth.uid(), 'payment_squared_off', 'job_clearing', cid, _job_id::text);
+end $$;
+create or replace function public.reopen_job_clearing(_job_id uuid, _reason text) returns void language plpgsql security definer set search_path=public as $$
+declare cid uuid;
+begin
+  if not public.is_finance() then raise exception 'Not authorised'; end if;
+  perform public.firm_guard('jobs', _job_id);
+  if exists(select 1 from public.invoices where job_id=_job_id and status<>'cancelled') then raise exception 'This job already has an invoice. Cancel the invoice before reopening the clearing.'; end if;
+  update public.job_clearing set status='draft', cleared_at=null, cleared_by=null, squared_off_at=null, squared_off_by=null where job_id=_job_id returning id into cid;
+  if cid is null then raise exception 'No clearing record found for this job.'; end if;
+  insert into public.audit_logs(user_id, action, module, record_id, reason) values (auth.uid(), 'clearing_reopened', 'job_clearing', cid, coalesce(_reason,''));
+end $$;
+create or replace function public.job_workflow(_job_id uuid) returns jsonb language plpgsql security definer set search_path=public as $$
+declare j record; c record; inv record; npay int; nopen numeric; blocked text; avail bool;
+begin
+  select * into j from public.jobs where id=_job_id;
+  if j.id is null then raise exception 'Job not found'; end if;
+  perform public.firm_guard('jobs', _job_id);
+  select * into c from public.job_clearing where job_id=_job_id;
+  select * into inv from public.invoices where job_id=_job_id and status<>'cancelled' limit 1;
+  select count(*) into npay from public.payments where job_id=_job_id and status<>'reversed';
+  select coalesce(sum(greatest(amount - allocated_amount, 0)),0) into nopen from public.payments where job_id=_job_id and status<>'reversed';
+  blocked := null; avail := false;
+  if inv.id is not null then
+    avail := false; blocked := format('Invoice %s already exists for this job.', inv.invoice_no);
+  elsif j.status = 'cancelled' then
+    avail := false; blocked := 'Job is cancelled.';
+  elsif j.status <> 'completed' then
+    avail := false; blocked := 'Job must be completed before payment clearing.';
+  elsif c.id is null or c.status = 'draft' then
+    avail := false; blocked := 'Invoice cannot be created until payment clearing is completed.';
+  elsif c.status = 'cleared' then
+    avail := false; blocked := 'Invoice cannot be created until payment is squared off.';
+  else
+    avail := true; blocked := null;
+  end if;
+  return jsonb_build_object(
+    'job_id', j.id, 'job_code', j.job_code, 'job_status', j.status,
+    'job_completed_at', j.completed_at, 'due_date', j.due_date,
+    'overdue', (j.due_date is not null and j.due_date < current_date and coalesce(c.status,'') <> 'squared_off' and j.status <> 'cancelled'),
+    'gross_fee', j.fee, 'job_discount', j.discount, 'net_amount', j.net_amount,
+    'advance', coalesce(c.advance,0), 'tds_tcs', coalesce(c.tds_tcs,0),
+    'clearing_discount', coalesce(c.discount,0), 'other_deduction', coalesce(c.other_deduction,0), 'other_addition', coalesce(c.other_addition,0),
+    'clearing_status', coalesce(c.status,'draft'), 'clearing_id', c.id,
+    'cleared_at', c.cleared_at, 'squared_off_at', c.squared_off_at,
+    'final_amount', coalesce(c.final_amount, 0),
+    'payment_count', npay, 'payment_unallocated', nopen,
+    'invoice_id', inv.id, 'invoice_no', inv.invoice_no, 'invoice_status', inv.status,
+    'invoice_available', avail, 'blocked_reason', blocked,
+    'stages', jsonb_build_object(
+      'created', true,
+      'completed', (j.status = 'completed'),
+      'payment_created', (npay > 0),
+      'payment_cleared', (c.status in ('cleared','squared_off')),
+      'squared_off', (c.status = 'squared_off'),
+      'invoiced', (inv.id is not null)
+    )
+  );
+end $$;
+grant select, insert, update on public.job_clearing, public.expenses, public.job_conditions, public.recurring_payments to authenticated;
+grant all on public.job_clearing, public.expenses, public.job_conditions, public.recurring_payments to service_role;
+grant update on public.payments to authenticated;
+revoke execute on function public.assert_invoice_eligible(uuid), public.save_job_clearing(uuid, numeric, numeric, numeric, numeric, numeric, text), public.mark_job_cleared(uuid, text), public.sq_off_job_clearing(uuid, text), public.reopen_job_clearing(uuid, text), public.job_workflow(uuid), public.create_invoice_for_job(uuid, uuid, date, date, numeric, text, text, numeric) from public, anon;
+grant execute on function public.create_invoice_for_job(uuid, uuid, date, date, numeric, text, text, numeric), public.save_job_clearing(uuid, numeric, numeric, numeric, numeric, numeric, text), public.mark_job_cleared(uuid, text), public.sq_off_job_clearing(uuid, text), public.reopen_job_clearing(uuid, text), public.job_workflow(uuid), public.update_job_status(uuid, text, text), public.create_invoice(uuid, uuid[], date, date, numeric, text, numeric, text, text, numeric) to authenticated;
+
+-- ===== Migration 20261006120000_module_permissions =====
+/* ==========================================================================
+   Per-module permissions chosen by the firm Admin.
+   1. The role enum narrows to admin / staff / cashier. "owner" becomes
+      "admin" and "accountant" becomes "staff", so nobody silently loses the
+      ability to sign in; an Admin then widens or narrows what Staff and
+      Cashier can do from Roles & Permissions.
+   2. Access to the practice modules (clients, services, jobs, recurring,
+      payments, expenses) is no longer hard-coded into RLS. It is read from
+      role_permissions, which the Admin edits. Admin always passes
+      has_capability() so a firm can never lock itself out of its own data.
+   3. Missing rows fall back to permission_defaults(), which reproduces the
+      behaviour the app had before this migration, so a firm that never opens
+      the matrix behaves exactly as it does today.
+   4. Admin is deliberately not editable and Payments cannot be deleted: money
+      is corrected by reverse/cancel RPCs, never by removing a row. Clients,
+      Services, Jobs and Expenses may be deleted, and the existing ON DELETE
+      RESTRICT foreign keys already refuse to delete anything that has
+      financial history.
+   Paste-safe: no line comments and no blank lines, because the Supabase SQL
+   editor strips newlines and would otherwise swallow the rest of the script.
+   ========================================================================== */
+drop policy if exists "roles read" on public.user_roles;
+drop policy if exists "roles manage ins" on public.user_roles;
+drop policy if exists "roles manage del" on public.user_roles;
+drop policy if exists "firm isolation" on public.user_roles;
+/* has_role takes app_role as an argument, so the enum swap below cannot proceed
+   until every policy that calls it has gone. These three are recreated further
+   down against has_capability instead. */
+drop policy if exists "clients read" on public.clients;
+drop policy if exists "cs read" on public.client_services;
+drop policy if exists "jobs read" on public.jobs;
+/* Everything that names app_role in its signature or columns has to go before
+   the type can be replaced. All of it is recreated and reseeded further down, so
+   this also makes the script re-runnable; the cost is that a second run resets
+   an Admin's permission choices back to the defaults. */
+drop function if exists public.has_role(uuid, public.app_role);
+drop function if exists public.my_roles();
+drop function if exists public.permission_matrix();
+drop function if exists public.set_role_permission(public.app_role, text, boolean, boolean, boolean, boolean, boolean);
+drop function if exists public.permission_defaults(public.app_role, text);
+drop function if exists public.effective_permissions(uuid, public.app_role, text);
+drop function if exists public.ensure_role_permission(uuid, public.app_role, text);
+drop table if exists public.role_permissions;
+alter table public.firm_invites alter column role drop default;
+alter table public.user_roles alter column role drop default;
+create type public.app_role_v2 as enum ('admin','staff','cashier');
+alter table public.user_roles alter column role type public.app_role_v2 using (case role::text when 'owner' then 'admin' when 'admin' then 'admin' when 'staff' then 'staff' else 'cashier' end)::public.app_role_v2;
+alter table public.firm_invites alter column role type public.app_role_v2 using (case role::text when 'owner' then 'admin' when 'admin' then 'admin' when 'staff' then 'staff' else 'cashier' end)::public.app_role_v2;
+alter table public.firm_invites alter column role set default 'staff';
+alter table public.user_roles alter column role set default 'staff';
+drop type public.app_role;
+alter type public.app_role_v2 rename to app_role;
+create or replace function public.has_role(_user_id uuid, _role public.app_role) returns boolean language sql stable security definer set search_path=public as $$ select exists(select 1 from public.user_roles where user_id=_user_id and role=_role) $$;
+create or replace function public.is_manager() returns boolean language sql stable security definer set search_path=public as $$ select public.is_super_admin() or exists(select 1 from public.user_roles where user_id=auth.uid() and role='admin') $$;
+create or replace function public.is_finance() returns boolean language sql stable security definer set search_path=public as $$ select public.is_manager() $$;
+create or replace function public.is_staff_plus() returns boolean language sql stable security definer set search_path=public as $$ select public.is_super_admin() or exists(select 1 from public.user_roles where user_id=auth.uid() and role in ('admin','staff')) $$;
+create or replace function public.is_cashier() returns boolean language sql stable security definer set search_path=public as $$ select exists(select 1 from public.user_roles where user_id=auth.uid() and role='cashier') $$;
+create or replace function public.my_roles() returns setof public.app_role language sql stable security definer set search_path=public as $$ select 'admin'::public.app_role where public.is_super_admin() union select role from public.user_roles where user_id=auth.uid() and not public.is_super_admin() $$;
+create policy "roles read" on public.user_roles for select to authenticated using (user_id = auth.uid() or public.is_manager());
+create policy "roles manage ins" on public.user_roles for insert to authenticated with check (public.is_manager());
+create policy "roles manage del" on public.user_roles for delete to authenticated using (public.is_manager());
+create policy "firm isolation" on public.user_roles as restrictive for all to authenticated using (user_id=auth.uid() or exists(select 1 from public.profiles p where p.id=user_roles.user_id and p.firm_id=public.current_firm_id())) with check (exists(select 1 from public.profiles p where p.id=user_roles.user_id and p.firm_id=public.current_firm_id()));
+create table if not exists public.role_permissions (firm_id uuid not null default public.current_firm_id() references public.firms(id) on delete cascade, role public.app_role not null, module text not null check (module in ('clients','services','jobs','recurring','payments','expenses')), can_view boolean not null default false, can_create boolean not null default false, can_edit boolean not null default false, can_delete boolean not null default false, can_amounts boolean not null default false, updated_by uuid default auth.uid(), updated_at timestamptz not null default now(), primary key (firm_id, role, module));
+create index if not exists role_permissions_firm_idx on public.role_permissions(firm_id);
+alter table public.role_permissions enable row level security;
+drop policy if exists "role_permissions read" on public.role_permissions;
+drop policy if exists "role_permissions firm isolation" on public.role_permissions;
+create policy "role_permissions read" on public.role_permissions for select to authenticated using (firm_id=public.current_firm_id());
+create policy "role_permissions firm isolation" on public.role_permissions as restrictive for all to authenticated using (firm_id=public.current_firm_id()) with check (firm_id=public.current_firm_id());
+/* Defaults reproduce the pre-migration behaviour: Admin everything, Staff read the practice modules and progress job status, Cashier records payments. Admin can delete every module except Payments, because payment rows are reversed rather than removed. */
+/* Payments are never deletable for anyone: set_role_permission refuses the grant and the table has no DELETE grant. Admin still deletes Clients, Services, Jobs, Recurring and Expenses, whose ON DELETE RESTRICT foreign keys are what refuse a record with financial history. */
+create or replace function public.permission_defaults(_role public.app_role, _module text) returns table(can_view boolean, can_create boolean, can_edit boolean, can_delete boolean, can_amounts boolean) language sql immutable as $$ select case when _role='admin' then true when _role='cashier' then _module='payments' else true end, case when _role='admin' then true when _role='cashier' then _module='payments' else false end, case when _role='admin' then true when _role='staff' then _module='jobs' else false end, case when _role='admin' then _module<>'payments' else false end, case when _role='admin' then true when _role='cashier' then _module='payments' else false end $$;
+/* can_delete is forced false for payments here as well as in set_role_permission, so a row written by any other path still cannot make has_capability('payments','delete') true. The rule is enforced at the point of use, not only at the point of writing. */
+create or replace function public.effective_permissions(_firm_id uuid, _role public.app_role, _module text) returns table(can_view boolean, can_create boolean, can_edit boolean, can_delete boolean, can_amounts boolean) language sql stable security definer set search_path=public as $$ select coalesce(rp.can_view, d.can_view), coalesce(rp.can_create, d.can_create), coalesce(rp.can_edit, d.can_edit), case when _module='payments' then false else coalesce(rp.can_delete, d.can_delete) end, coalesce(rp.can_amounts, d.can_amounts) from public.permission_defaults(_role, _module) d left join public.role_permissions rp on rp.firm_id=_firm_id and rp.role=_role and rp.module=_module $$;
+create or replace function public.has_capability(_module text, _action text) returns boolean language sql stable security definer set search_path=public as $$ select public.is_manager() or exists (select 1 from public.my_roles() rr cross join lateral public.effective_permissions(public.current_firm_id(), rr, _module) p where case _action when 'view' then p.can_view when 'create' then p.can_create when 'edit' then p.can_edit when 'delete' then p.can_delete when 'amounts' then p.can_amounts else false end) $$;
+create or replace function public.seed_role_permissions(_firm_id uuid) returns void language plpgsql security definer set search_path=public as $$ begin insert into public.role_permissions(firm_id, role, module, can_view, can_create, can_edit, can_delete, can_amounts) select _firm_id, r.role, m.module, d.can_view, d.can_create, d.can_edit, d.can_delete, d.can_amounts from unnest(array['admin','staff','cashier']::public.app_role[]) r(role) cross join unnest(array['clients','services','jobs','recurring','payments','expenses']) m(module) cross join lateral public.permission_defaults(r.role, m.module) d on conflict (firm_id, role, module) do nothing; end $$;
+select public.seed_role_permissions(id) from public.firms;
+/* Returns the stored row for a role+module, creating it from the defaults if it is missing, so that an Admin editing one cell always writes a complete row. */
+create or replace function public.ensure_role_permission(_firm_id uuid, _role public.app_role, _module text) returns void language plpgsql security definer set search_path=public as $$ begin insert into public.role_permissions(firm_id, role, module, can_view, can_create, can_edit, can_delete, can_amounts) select _firm_id, _role, _module, d.can_view, d.can_create, d.can_edit, d.can_delete, d.can_amounts from public.permission_defaults(_role, _module) d on conflict (firm_id, role, module) do nothing; end $$;
+create or replace function public.permission_matrix() returns table(role public.app_role, module text, can_view boolean, can_create boolean, can_edit boolean, can_delete boolean, can_amounts boolean, editable boolean) language plpgsql security definer set search_path=public as $$ begin if not public.is_manager() then raise exception 'Not authorised'; end if; return query select r.role, m.module, coalesce(rp.can_view, d.can_view), coalesce(rp.can_create, d.can_create), coalesce(rp.can_edit, d.can_edit), case when m.module='payments' then false else coalesce(rp.can_delete, d.can_delete) end, coalesce(rp.can_amounts, d.can_amounts), r.role <> 'admin' from unnest(array['admin','staff','cashier']::public.app_role[]) r(role) cross join unnest(array['clients','services','jobs','recurring','payments','expenses']) m(module) cross join lateral public.permission_defaults(r.role, m.module) d left join public.role_permissions rp on rp.firm_id=public.current_firm_id() and rp.role=r.role and rp.module=m.module; end $$;
+create or replace function public.set_role_permission(_role public.app_role, _module text, _view boolean, _create boolean, _edit boolean, _delete boolean, _amounts boolean) returns void language plpgsql security definer set search_path=public as $$ begin if not public.is_manager() then raise exception 'Not authorised'; end if; if _role = 'admin' then raise exception 'The Admin role always has full access and cannot be restricted.'; end if; if _module not in ('clients','services','jobs','recurring','payments','expenses') then raise exception 'Unknown module'; end if; if _delete and _module = 'payments' then raise exception 'Payment records are never deleted. Reverse the payment instead.'; end if; insert into public.role_permissions(firm_id, role, module, can_view, can_create, can_edit, can_delete, can_amounts) values (public.current_firm_id(), _role, _module, coalesce(_view,false), coalesce(_view,false) and coalesce(_create,false), coalesce(_view,false) and coalesce(_edit,false), coalesce(_view,false) and coalesce(_delete,false), coalesce(_view,false) and coalesce(_amounts,false)) on conflict (firm_id, role, module) do update set can_view=excluded.can_view, can_create=excluded.can_create, can_edit=excluded.can_edit, can_delete=excluded.can_delete, can_amounts=excluded.can_amounts, updated_by=auth.uid(), updated_at=now(); insert into public.audit_logs(user_id, action, module, record_id, new_value) values (auth.uid(), 'role_permission_changed', 'role_permissions', _role::text || ':' || _module, jsonb_build_object('view', coalesce(_view,false), 'create', coalesce(_view,false) and coalesce(_create,false), 'edit', coalesce(_view,false) and coalesce(_edit,false), 'delete', coalesce(_view,false) and coalesce(_delete,false), 'amounts', coalesce(_view,false) and coalesce(_amounts,false))); end $$;
+/* Aggregates are computed in the inner grouped query and only assembled into jsonb outside it, because an aggregate may not contain another aggregate. my_roles() is cross joined rather than referenced in the select list so that a user holding several roles gets the union of their grants. */
+create or replace function public.my_permissions() returns jsonb language sql stable security definer set search_path=public as $$ select coalesce(jsonb_object_agg(s.module, jsonb_build_object('view', s.can_view, 'create', s.can_create, 'edit', s.can_edit, 'delete', s.can_delete, 'amounts', s.can_amounts)), '{}'::jsonb) from (select m.module, bool_or(p.can_view) as can_view, bool_or(p.can_create) as can_create, bool_or(p.can_edit) as can_edit, bool_or(p.can_delete) as can_delete, bool_or(p.can_amounts) as can_amounts from unnest(array['clients','services','jobs','recurring','payments','expenses']) m(module) cross join public.my_roles() rr cross join lateral public.effective_permissions(public.current_firm_id(), rr, m.module) p group by m.module) s $$;
+create or replace function public.reset_role_permissions() returns void language plpgsql security definer set search_path=public as $$ begin if not public.is_manager() then raise exception 'Not authorised'; end if; delete from public.role_permissions where firm_id=public.current_firm_id(); perform public.seed_role_permissions(public.current_firm_id()); insert into public.audit_logs(user_id, action, module, record_id, reason) values (auth.uid(), 'role_permissions_reset', 'role_permissions', public.current_firm_id()::text, 'restored defaults'); end $$;
+/* RLS now reads the matrix instead of hard-coded roles. A grant is firm-wide: once Staff can see Clients they see every client, not only assigned ones. */
+drop policy if exists "clients read" on public.clients;
+drop policy if exists "clients ins" on public.clients;
+drop policy if exists "clients upd" on public.clients;
+drop policy if exists "clients del" on public.clients;
+create policy "clients read" on public.clients for select to authenticated using (public.has_capability('clients','view'));
+create policy "clients ins" on public.clients for insert to authenticated with check (public.has_capability('clients','create'));
+create policy "clients upd" on public.clients for update to authenticated using (public.has_capability('clients','edit')) with check (public.has_capability('clients','edit'));
+create policy "clients del" on public.clients for delete to authenticated using (public.has_capability('clients','delete'));
+drop policy if exists "services read" on public.services;
+drop policy if exists "services ins" on public.services;
+drop policy if exists "services upd" on public.services;
+drop policy if exists "services del" on public.services;
+create policy "services read" on public.services for select to authenticated using (public.has_capability('services','view'));
+create policy "services ins" on public.services for insert to authenticated with check (public.has_capability('services','create'));
+create policy "services upd" on public.services for update to authenticated using (public.has_capability('services','edit')) with check (public.has_capability('services','edit'));
+create policy "services del" on public.services for delete to authenticated using (public.has_capability('services','delete'));
+/* client_services carries the retainer schedule, so it answers to either the Recurring module (the /recurring page) or the Clients module (the client detail page). Either grant is enough. */
+drop policy if exists "cs read" on public.client_services;
+drop policy if exists "cs ins" on public.client_services;
+drop policy if exists "cs upd" on public.client_services;
+drop policy if exists "cs del" on public.client_services;
+create policy "cs read" on public.client_services for select to authenticated using (public.has_capability('recurring','view') or public.has_capability('clients','view'));
+create policy "cs ins" on public.client_services for insert to authenticated with check (public.has_capability('recurring','create') or public.has_capability('clients','create'));
+create policy "cs upd" on public.client_services for update to authenticated using (public.has_capability('recurring','edit') or public.has_capability('clients','edit')) with check (public.has_capability('recurring','edit') or public.has_capability('clients','edit'));
+create policy "cs del" on public.client_services for delete to authenticated using (public.has_capability('recurring','delete'));
+drop policy if exists "jobs read" on public.jobs;
+drop policy if exists "jobs ins" on public.jobs;
+drop policy if exists "jobs upd" on public.jobs;
+drop policy if exists "jobs del" on public.jobs;
+create policy "jobs read" on public.jobs for select to authenticated using (public.has_capability('jobs','view'));
+create policy "jobs ins" on public.jobs for insert to authenticated with check (public.has_capability('jobs','create'));
+create policy "jobs upd" on public.jobs for update to authenticated using (public.has_capability('jobs','edit')) with check (public.has_capability('jobs','edit'));
+create policy "jobs del" on public.jobs for delete to authenticated using (public.has_capability('jobs','delete'));
+/* Colleague names are needed to render "Assigned to" on any list the caller can already read, so profiles read follows module access rather than a fixed role list. */
+drop policy if exists "profiles read" on public.profiles;
+create policy "profiles read" on public.profiles for select to authenticated using (id = auth.uid() or public.has_capability('clients','view') or public.has_capability('jobs','view') or public.is_manager());
+/* Payments deliberately have no update policy: allocated_amount and status are moved by allocate_payment / reverse_payment so the totals stay correct. The Payments Edit column therefore gates reversal. */
+drop policy if exists "pay read" on public.payments;
+drop policy if exists "pay ins" on public.payments;
+drop policy if exists "alloc read" on public.payment_allocations;
+drop policy if exists "rev read" on public.payment_reversals;
+create policy "pay read" on public.payments for select to authenticated using (public.has_capability('payments','view'));
+create policy "pay ins" on public.payments for insert to authenticated with check (public.has_capability('payments','create') and created_by=auth.uid());
+create policy "alloc read" on public.payment_allocations for select to authenticated using (public.has_capability('payments','edit'));
+create policy "rev read" on public.payment_reversals for select to authenticated using (public.has_capability('payments','edit'));
+/* The expenses / recurring_payments tables arrive with the job-payment workflow migration, which is not on every database yet. Policies cannot be created against a missing relation, so these are applied only when the table is present; the matrix still lists Expenses as a module and it starts working the moment that migration lands. */
+do $$ begin if to_regclass('public.expenses') is not null then drop policy if exists "expenses read" on public.expenses; drop policy if exists "expenses write" on public.expenses; drop policy if exists "expenses ins" on public.expenses; drop policy if exists "expenses upd" on public.expenses; create policy "expenses read" on public.expenses for select to authenticated using (public.has_capability('expenses','view')); create policy "expenses ins" on public.expenses for insert to authenticated with check (public.has_capability('expenses','create')); create policy "expenses upd" on public.expenses for update to authenticated using (public.has_capability('expenses','edit')) with check (public.has_capability('expenses','edit')); end if; if to_regclass('public.recurring_payments') is not null then drop policy if exists "recurring_payments read" on public.recurring_payments; drop policy if exists "recurring_payments write" on public.recurring_payments; drop policy if exists "recurring_payments ins" on public.recurring_payments; drop policy if exists "recurring_payments upd" on public.recurring_payments; drop policy if exists "recurring_payments del" on public.recurring_payments; create policy "recurring_payments read" on public.recurring_payments for select to authenticated using (public.has_capability('recurring','view')); create policy "recurring_payments ins" on public.recurring_payments for insert to authenticated with check (public.has_capability('recurring','create')); create policy "recurring_payments upd" on public.recurring_payments for update to authenticated using (public.has_capability('recurring','edit')) with check (public.has_capability('recurring','edit')); create policy "recurring_payments del" on public.recurring_payments for delete to authenticated using (public.has_capability('recurring','delete')); end if; end $$;
+/* RLS filters rows, not columns, so a Cashier who may view payments would still receive every amount over PostgREST if the UI read the table directly. These two list RPCs blank the money columns server-side unless the caller holds the module's amounts grant, so the figure genuinely never reaches the browser. */
+/* These six are SECURITY DEFINER, which bypasses RLS, so each one must repeat the
+   firm filter and the view grant itself. Without the firm_id predicate they would
+   return every firm's rows, and has_capability() inside them would still resolve
+   against the CALLER's firm, so the money columns would be unmasked for another
+   firm's data. */
+create or replace function public.payments_list() returns table(id uuid, payment_code text, client_id uuid, job_id uuid, amount numeric, mode text, payment_date date, reference text, narration text, status text, created_at timestamptz) language sql stable security definer set search_path=public as $$ select p.id, p.payment_code, p.client_id, p.job_id, case when public.has_capability('payments','amounts') then p.amount end, p.mode, p.payment_date, p.reference, p.narration, p.status, p.created_at from public.payments p where p.firm_id=public.current_firm_id() and public.has_capability('payments','view') order by p.created_at desc $$;
+create or replace function public.jobs_list() returns table(id uuid, job_code text, client_id uuid, client_name text, service_id uuid, service_name text, client_service_id uuid, title text, period_start date, period_end date, fee numeric, discount numeric, net_amount numeric, due_date date, assigned_staff uuid, assigned_staff_name text, status text, financial_status text, notes text, auto_invoice boolean, created_at timestamptz, invoice_id uuid, invoice_no text, invoice_status text) language sql stable security definer set search_path=public as $$ select j.id, j.job_code, j.client_id, c.name, j.service_id, s.name, j.client_service_id, j.title, j.period_start, j.period_end, case when public.has_capability('jobs','amounts') then j.fee end, case when public.has_capability('jobs','amounts') then j.discount end, case when public.has_capability('jobs','amounts') then j.net_amount end, j.due_date, j.assigned_staff, pf.full_name, j.status, j.financial_status, j.notes, j.auto_invoice, j.created_at, inv.id, inv.invoice_no, inv.status from public.jobs j left join public.clients c on c.id=j.client_id left join public.services s on s.id=j.service_id left join public.profiles pf on pf.id=j.assigned_staff left join lateral (select i.id, i.invoice_no, i.status from public.invoice_items ii join public.invoices i on i.id=ii.invoice_id where ii.job_id=j.id and i.status<>'cancelled' order by i.created_at desc limit 1) inv on true where j.firm_id=public.current_firm_id() and public.has_capability('jobs','view') order by j.due_date asc nulls last $$;
+create or replace function public.recurring_list() returns table(id uuid, client_id uuid, client_name text, service_id uuid, service_name text, agreed_fee numeric, frequency text, start_date date, end_date date, due_days int, assigned_staff uuid, assigned_staff_name text, status text, notes text, auto_invoice boolean, created_at timestamptz) language sql stable security definer set search_path=public as $$ select cs.id, cs.client_id, c.name, cs.service_id, s.name, case when public.has_capability('recurring','amounts') then cs.agreed_fee end, cs.frequency, cs.start_date, cs.end_date, cs.due_days, cs.assigned_staff, pf.full_name, cs.status, cs.notes, cs.auto_invoice, cs.created_at from public.client_services cs left join public.clients c on c.id=cs.client_id left join public.services s on s.id=cs.service_id left join public.profiles pf on pf.id=cs.assigned_staff where cs.firm_id=public.current_firm_id() and public.has_capability('recurring','view') order by cs.created_at $$;
+create or replace function public.client_services_list(_client_id uuid) returns table(id uuid, client_id uuid, service_id uuid, service_name text, service_type text, auto_invoice boolean, agreed_fee numeric, frequency text, start_date date, end_date date, due_days int, assigned_staff uuid, assigned_staff_name text, status text, notes text, created_at timestamptz) language sql stable security definer set search_path=public as $$ select cs.id, cs.client_id, cs.service_id, s.name, s.service_type, s.auto_invoice, case when public.has_capability('recurring','amounts') or public.has_capability('services','amounts') then cs.agreed_fee end, cs.frequency, cs.start_date, cs.end_date, cs.due_days, cs.assigned_staff, pf.full_name, cs.status, cs.notes, cs.created_at from public.client_services cs left join public.services s on s.id=cs.service_id left join public.profiles pf on pf.id=cs.assigned_staff where cs.client_id=_client_id and cs.firm_id=public.current_firm_id() and (public.has_capability('recurring','view') or public.has_capability('clients','view')) order by cs.created_at $$;
+create or replace function public.client_jobs_list(_client_id uuid) returns table(id uuid, job_code text, client_id uuid, service_id uuid, service_name text, title text, period_start date, period_end date, fee numeric, discount numeric, net_amount numeric, due_date date, assigned_staff uuid, assigned_staff_name text, status text, financial_status text, notes text, auto_invoice boolean, created_at timestamptz, invoice_id uuid, invoice_no text, invoice_status text) language sql stable security definer set search_path=public as $$ select j.id, j.job_code, j.client_id, j.service_id, s.name, j.title, j.period_start, j.period_end, case when public.has_capability('jobs','amounts') then j.fee end, case when public.has_capability('jobs','amounts') then j.discount end, case when public.has_capability('jobs','amounts') then j.net_amount end, j.due_date, j.assigned_staff, pf.full_name, j.status, j.financial_status, j.notes, j.auto_invoice, j.created_at, inv.id, inv.invoice_no, inv.status from public.jobs j left join public.services s on s.id=j.service_id left join public.profiles pf on pf.id=j.assigned_staff left join lateral (select i.id, i.invoice_no, i.status from public.invoice_items ii join public.invoices i on i.id=ii.invoice_id where ii.job_id=j.id and i.status<>'cancelled' order by i.created_at desc limit 1) inv on true where j.client_id=_client_id and j.firm_id=public.current_firm_id() and public.has_capability('jobs','view') order by j.created_at desc $$;
+create or replace function public.client_payments_list(_client_id uuid) returns table(id uuid, payment_code text, client_id uuid, job_id uuid, amount numeric, allocated_amount numeric, mode text, payment_date date, reference text, narration text, status text, created_at timestamptz) language sql stable security definer set search_path=public as $$ select p.id, p.payment_code, p.client_id, p.job_id, case when public.has_capability('payments','amounts') then p.amount end, case when public.has_capability('payments','amounts') then p.allocated_amount end, p.mode, p.payment_date, p.reference, p.narration, p.status, p.created_at from public.payments p where p.client_id=_client_id and p.firm_id=public.current_firm_id() and public.has_capability('payments','view') order by p.payment_date desc $$;
+create or replace function public.client_lookup() returns table(id uuid, client_code text, name text) language sql stable security definer set search_path=public as $$ select id, client_code, name from public.clients where status='active' and firm_id=public.current_firm_id() and (public.has_capability('clients','view') or public.has_capability('payments','create')) order by name $$;
+create or replace function public.update_job_status(_job_id uuid, _status text, _reason text) returns void language plpgsql security definer set search_path=public as $$ begin perform public.firm_guard('jobs', _job_id); if not public.has_capability('jobs','edit') then raise exception 'Not authorised'; end if; perform set_config('app.status_reason', coalesce(_reason,''), true); update public.jobs set status=_status where id=_job_id; end $$;
+create or replace function public.generate_recurring_jobs(_upto date) returns integer language plpgsql security definer set search_path=public as $$ declare cs record; ps date; pe date; step interval; n int := 0; svc record; lbl text; begin if not public.has_capability('recurring','edit') then raise exception 'Not authorised'; end if; for cs in select * from public.client_services where status='active' and firm_id=public.current_firm_id() loop select * into svc from public.services where id=cs.service_id; if cs.frequency='one_time' then insert into public.jobs(client_id, service_id, client_service_id, title, period_start, period_end, fee, due_date, assigned_staff, created_by) values (cs.client_id, cs.service_id, cs.id, svc.name, cs.start_date, cs.start_date, cs.agreed_fee, cs.start_date + cs.due_days, cs.assigned_staff, auth.uid()) on conflict do nothing; if found then n := n + 1; end if; continue; end if; step := case cs.frequency when 'monthly' then interval '1 month' when 'quarterly' then interval '3 months' when 'half_yearly' then interval '6 months' else interval '1 year' end; ps := date_trunc('month', cs.start_date)::date; while ps <= _upto and (cs.end_date is null or ps <= cs.end_date) loop pe := (ps + step - interval '1 day')::date; lbl := case cs.frequency when 'monthly' then to_char(ps,'Mon YYYY') when 'yearly' then 'FY ' || to_char(ps,'YYYY') else to_char(ps,'Mon YYYY') || ' – ' || to_char(pe,'Mon YYYY') end; insert into public.jobs(client_id, service_id, client_service_id, title, period_start, period_end, fee, due_date, assigned_staff, created_by) values (cs.client_id, cs.service_id, cs.id, svc.name || ' – ' || lbl, ps, pe, cs.agreed_fee, pe + cs.due_days, cs.assigned_staff, auth.uid()) on conflict do nothing; if found then n := n + 1; end if; ps := (ps + step)::date; end loop; end loop; return n; end $$;
+create or replace function public.reverse_payment(_payment_id uuid, _reason text) returns void language plpgsql security definer set search_path=public as $$ declare r record; begin if not public.has_capability('payments','edit') then raise exception 'Not authorised'; end if; perform public.firm_guard('payments', _payment_id); if coalesce(trim(_reason),'') = '' then raise exception 'Reason is required'; end if; if exists(select 1 from public.payments where id=_payment_id and status='reversed') then raise exception 'Already reversed'; end if; update public.payments set status='reversed' where id=_payment_id; for r in select id from public.payment_allocations where payment_id=_payment_id and not reversed loop update public.payment_allocations set reversed=true, reversed_at=now() where id=r.id; end loop; insert into public.payment_reversals(payment_id, reason, reversed_by) values (_payment_id, _reason, auth.uid()); perform public.recalc_payment(_payment_id); end $$;
+create or replace function public.reverse_allocation(_allocation_id uuid, _reason text) returns void language plpgsql security definer set search_path=public as $$ begin if not public.has_capability('payments','edit') then raise exception 'Not authorised'; end if; perform public.firm_guard('payment_allocations', _allocation_id); update public.payment_allocations set reversed=true, reversed_at=now() where id=_allocation_id and not reversed; insert into public.audit_logs(user_id, action, module, record_id, reason) values (auth.uid(),'allocation_reversed','payment_allocations',_allocation_id::text,_reason); end $$;
+do $$ begin if to_regclass('public.expenses') is not null then execute $f$ create or replace function public.delete_expense(_expense_id uuid, _reason text) returns void language plpgsql security definer set search_path=public as $b$ begin if not public.has_capability('expenses','delete') then raise exception 'Not authorised'; end if; if coalesce(btrim(_reason),'')='' then raise exception 'Reason is required'; end if; perform public.firm_guard('expenses', _expense_id); delete from public.expenses where id=_expense_id; insert into public.audit_logs(user_id, action, module, record_id, reason) values (auth.uid(),'expense_deleted','expenses',_expense_id::text,_reason); end $b$ $f$; end if; end $$;
+create or replace function public.create_firm(_name text, _owner_email text, _phone text, _city text, _logo_url text) returns uuid language plpgsql security definer set search_path=public as $$ declare fid uuid; begin if not public.is_super_admin() then raise exception 'Not authorised'; end if; if coalesce(trim(_name),'')='' then raise exception 'Firm name is required'; end if; insert into public.firms(name, owner_email, phone, city, logo_url) values (trim(_name), lower(trim(_owner_email)), _phone, _city, _logo_url) returning id into fid; insert into public.settings(firm_id, firm_name, phone, email) values (fid, trim(_name), _phone, lower(trim(_owner_email))); perform public.seed_role_permissions(fid); return fid; end $$;
+grant delete on public.clients, public.services, public.jobs, public.client_services to authenticated;
+do $$ begin if to_regclass('public.recurring_payments') is not null then execute 'grant delete on public.recurring_payments to authenticated'; end if; end $$;
+do $$ begin if to_regclass('public.expenses') is not null then execute 'revoke delete on public.expenses from authenticated'; end if; if to_regclass('public.job_clearing') is not null then execute 'revoke delete on public.job_clearing from authenticated'; end if; end $$;
+revoke delete on public.payments, public.invoices, public.invoice_items, public.discounts, public.payment_allocations, public.payment_reversals from authenticated;
+revoke execute on function public.permission_defaults(public.app_role, text), public.effective_permissions(uuid, public.app_role, text), public.seed_role_permissions(uuid) from public, anon;
+grant all on public.role_permissions to service_role;
+/* has_capability must stay executable for authenticated: RLS policy expressions are evaluated with the querying user's privileges, so revoking it would make every module error out rather than merely stay locked. */
+grant execute on function public.payments_list(), public.jobs_list(), public.recurring_list(), public.client_services_list(uuid), public.client_jobs_list(uuid), public.client_payments_list(uuid), public.has_capability(text, text), public.my_permissions(), public.permission_matrix(), public.set_role_permission(public.app_role, text, boolean, boolean, boolean, boolean, boolean), public.reset_role_permissions(), public.has_role(uuid, public.app_role), public.my_roles(), public.client_lookup(), public.update_job_status(uuid, text, text), public.generate_recurring_jobs(date), public.reverse_payment(uuid, text), public.reverse_allocation(uuid, text) to authenticated;
+do $$ begin if to_regclass('public.expenses') is not null then execute 'grant execute on function public.delete_expense(uuid, text) to authenticated'; end if; end $$;
+-- ===== Migration 20261006160000_sequential_master_codes =====
+/* ==========================================================================
+   Sequential master numbering: clients and services count 1, 2, 3...
+
+   Both codes keep their CL0001 / SV001 shape; what changes is where the numbers
+   come from. They were previously drawn from a single global sequence per table,
+   which produced two problems:
+
+   1. The numbers were not contiguous. Deleting a client left a gap, and the
+      next client was CL0028 after CL0020, which reads as random rather than
+      sequential to anyone looking at the list.
+   2. The sequence was global across all firms, so a second firm started at
+      CL0029 and two firms could never both hold "CL0001".
+
+   Numbers are now per firm, allocated by next_master_code() from doc_counters,
+   which the document-numbering migration already introduced. Clients and
+   services use the sentinel period 'ALL' because they never reset on a period
+   boundary the way an invoice number does; only the firm and kind separate them.
+
+   Existing rows are renumbered 1..N per firm in creation order, so the sequence
+   is contiguous from the start rather than starting again after the old codes.
+   This is safe because nothing references these columns by value: client_code
+   and service_code are display labels, and every foreign key points at the uuid.
+   Import/export reads client_code only to map a spreadsheet row back to a uuid,
+   and it looks the value up at export time rather than storing it.
+
+   The global UNIQUE constraints become per-firm composite indexes, matching what
+   jobs/invoices/payments already do.
+
+   Paste-safe: no line comments and no blank lines, because the Supabase SQL
+   editor strips newlines and would otherwise swallow the rest of the script.
+   ========================================================================== */
+alter table public.doc_counters drop constraint if exists doc_counters_kind_check;
+alter table public.doc_counters add constraint doc_counters_kind_check check (kind in ('INV','REC','JOB','CLI','SVC'));
+alter table public.doc_counters drop constraint if exists doc_counters_period_check;
+alter table public.doc_counters add constraint doc_counters_period_check check (period ~ '^[0-9]{4}$' or period = 'ALL');
+create or replace function public.next_master_code(_kind text) returns text language plpgsql security definer set search_path=public as $$
+declare v_no int; v_prefix text; v_width int;
+begin
+  if _kind = 'CLI' then v_prefix := 'CL'; v_width := 4;
+  elsif _kind = 'SVC' then v_prefix := 'SV'; v_width := 3;
+  else raise exception 'Unknown master kind: %', _kind;
+  end if;
+  insert into public.doc_counters as c (firm_id, kind, period, last_no) values (public.current_firm_id(), _kind, 'ALL', 1)
+  on conflict (firm_id, kind, period) do update set last_no = c.last_no + 1 returning last_no into v_no;
+  return v_prefix || lpad(v_no::text, v_width, '0');
+end $$;
+revoke execute on function public.next_master_code(text) from public, anon, authenticated;
+/* One function serves both tables. The row is read as jsonb and written back,
+   because plpgsql resolves new.<column> against the live row type: naming
+   service_code while the trigger fires on clients raises "record new has no
+   field service_code" at runtime. */
+create or replace function public.stamp_master_code() returns trigger language plpgsql security definer set search_path=public as $$
+declare v_code text; v_col text; v_kind text;
+begin
+  if tg_table_name = 'clients' then v_col := 'client_code'; v_kind := 'CLI';
+  elsif tg_table_name = 'services' then v_col := 'service_code'; v_kind := 'SVC';
+  else return new;
+  end if;
+  if coalesce(btrim(to_jsonb(new)->>v_col), '') = '' then
+    v_code := public.next_master_code(v_kind);
+    new := jsonb_populate_record(new, jsonb_build_object(v_col, v_code));
+  end if;
+  return new;
+end $$;
+alter table public.clients alter column client_code drop default;
+alter table public.services alter column service_code drop default;
+drop trigger if exists clients_stamp_master_code on public.clients;
+create trigger clients_stamp_master_code before insert on public.clients for each row execute function public.stamp_master_code();
+drop trigger if exists services_stamp_master_code on public.services;
+create trigger services_stamp_master_code before insert on public.services for each row execute function public.stamp_master_code();
+drop index if exists public.clients_client_code_firm_uniq;
+drop index if exists public.services_service_code_firm_uniq;
+do $$ declare c record; begin for c in select conname from pg_constraint where conrelid = 'public.clients'::regclass and contype = 'u' loop execute format('alter table public.clients drop constraint %I', c.conname); end loop; for c in select conname from pg_constraint where conrelid = 'public.services'::regclass and contype = 'u' loop execute format('alter table public.services drop constraint %I', c.conname); end loop; execute 'create unique index clients_client_code_firm_uniq on public.clients(firm_id, client_code)'; execute 'create unique index services_service_code_firm_uniq on public.services(firm_id, service_code)'; end $$;
+/* Renumber to CL0001.. / SV001.. per firm in creation order, so the sequence is
+   contiguous from the start instead of continuing from the old global numbers. */
+with ranked as (select id, row_number() over (partition by firm_id order by created_at, id)::int as rn from public.clients)
+update public.clients c set client_code = 'CL' || lpad(ranked.rn::text, 4, '0') from ranked where c.id = ranked.id;
+with ranked as (select id, row_number() over (partition by firm_id order by created_at, id)::int as rn from public.services)
+update public.services s set service_code = 'SV' || lpad(ranked.rn::text, 3, '0') from ranked where s.id = ranked.id;
+insert into public.doc_counters (firm_id, kind, period, last_no)
+select f.id, k.kind, 'ALL',
+  case k.kind when 'CLI' then coalesce((select count(*) from public.clients c where c.firm_id=f.id), 0)
+              else coalesce((select count(*) from public.services s where s.firm_id=f.id), 0) end
+from public.firms f
+cross join (values ('CLI'),('SVC')) k(kind)
+on conflict (firm_id, kind, period) do update set last_no = excluded.last_no;
+
+-- ===== Migration 20261005090000_job_payment_workflow_schema.sql =====
+/* ==========================================================================
+   Phase 1 -- Job-centric workflow: JOB -> PAYMENT -> CLEARING -> SQUARE-OFF -> INVOICE
+   Invoice creation is impossible until the job's payment clearing is squared
+   off. Enforcement lives in Postgres; the UI only reflects it.
    References become JOB-XXXX-MMYY / PAY-XXXX-MMYY / INV-XXXX-MMYY.
    Paste-safe: no line comments and no blank lines, because the Supabase SQL
    editor strips newlines and would otherwise swallow the rest of the script.
@@ -1463,3 +2033,308 @@ grant all on public.job_clearing, public.expenses, public.job_conditions, public
 grant update on public.payments to authenticated;
 revoke execute on function public.assert_invoice_eligible(uuid), public.save_job_clearing(uuid, numeric, numeric, numeric, numeric, numeric, text), public.mark_job_cleared(uuid, text), public.sq_off_job_clearing(uuid, text), public.reopen_job_clearing(uuid, text), public.job_workflow(uuid), public.create_invoice_for_job(uuid, uuid, date, date, numeric, text, text, numeric) from public, anon;
 grant execute on function public.create_invoice_for_job(uuid, uuid, date, date, numeric, text, text, numeric), public.save_job_clearing(uuid, numeric, numeric, numeric, numeric, numeric, text), public.mark_job_cleared(uuid, text), public.sq_off_job_clearing(uuid, text), public.reopen_job_clearing(uuid, text), public.job_workflow(uuid), public.update_job_status(uuid, text, text), public.create_invoice(uuid, uuid[], date, date, numeric, text, numeric, text, text, numeric) to authenticated;
+-- ===== Migration 20261006120000_module_permissions.sql =====
+/* ==========================================================================
+   Per-module permissions chosen by the firm Admin.
+   1. The role enum narrows to admin / staff / cashier. "owner" becomes
+      "admin" and "accountant" becomes "staff", so nobody silently loses the
+      ability to sign in; an Admin then widens or narrows what Staff and
+      Cashier can do from Roles & Permissions.
+   2. Access to the practice modules (clients, services, jobs, recurring,
+      payments, expenses) is no longer hard-coded into RLS. It is read from
+      role_permissions, which the Admin edits. Admin always passes
+      has_capability() so a firm can never lock itself out of its own data.
+   3. Missing rows fall back to permission_defaults(), which reproduces the
+      behaviour the app had before this migration, so a firm that never opens
+      the matrix behaves exactly as it does today.
+   4. Admin is deliberately not editable and Payments cannot be deleted: money
+      is corrected by reverse/cancel RPCs, never by removing a row. Clients,
+      Services, Jobs and Expenses may be deleted, and the existing ON DELETE
+      RESTRICT foreign keys already refuse to delete anything that has
+      financial history.
+   Paste-safe: no line comments and no blank lines, because the Supabase SQL
+   editor strips newlines and would otherwise swallow the rest of the script.
+   ========================================================================== */
+drop policy if exists "roles read" on public.user_roles;
+drop policy if exists "roles manage ins" on public.user_roles;
+drop policy if exists "roles manage del" on public.user_roles;
+drop policy if exists "firm isolation" on public.user_roles;
+/* has_role takes app_role as an argument, so the enum swap below cannot proceed
+   until every policy that calls it has gone. These three are recreated further
+   down against has_capability instead. */
+drop policy if exists "clients read" on public.clients;
+drop policy if exists "cs read" on public.client_services;
+drop policy if exists "jobs read" on public.jobs;
+/* Everything that names app_role in its signature or columns has to go before
+   the type can be replaced. All of it is recreated and reseeded further down, so
+   this also makes the script re-runnable; the cost is that a second run resets
+   an Admin's permission choices back to the defaults. */
+drop function if exists public.has_role(uuid, public.app_role);
+drop function if exists public.my_roles();
+drop function if exists public.permission_matrix();
+drop function if exists public.set_role_permission(public.app_role, text, boolean, boolean, boolean, boolean, boolean);
+drop function if exists public.permission_defaults(public.app_role, text);
+drop function if exists public.effective_permissions(uuid, public.app_role, text);
+drop function if exists public.ensure_role_permission(uuid, public.app_role, text);
+drop table if exists public.role_permissions;
+alter table public.firm_invites alter column role drop default;
+alter table public.user_roles alter column role drop default;
+create type public.app_role_v2 as enum ('admin','staff','cashier');
+alter table public.user_roles alter column role type public.app_role_v2 using (case role::text when 'owner' then 'admin' when 'admin' then 'admin' when 'staff' then 'staff' else 'cashier' end)::public.app_role_v2;
+alter table public.firm_invites alter column role type public.app_role_v2 using (case role::text when 'owner' then 'admin' when 'admin' then 'admin' when 'staff' then 'staff' else 'cashier' end)::public.app_role_v2;
+alter table public.firm_invites alter column role set default 'staff';
+alter table public.user_roles alter column role set default 'staff';
+drop type public.app_role;
+alter type public.app_role_v2 rename to app_role;
+create or replace function public.has_role(_user_id uuid, _role public.app_role) returns boolean language sql stable security definer set search_path=public as $$ select exists(select 1 from public.user_roles where user_id=_user_id and role=_role) $$;
+create or replace function public.is_manager() returns boolean language sql stable security definer set search_path=public as $$ select public.is_super_admin() or exists(select 1 from public.user_roles where user_id=auth.uid() and role='admin') $$;
+create or replace function public.is_finance() returns boolean language sql stable security definer set search_path=public as $$ select public.is_manager() $$;
+create or replace function public.is_staff_plus() returns boolean language sql stable security definer set search_path=public as $$ select public.is_super_admin() or exists(select 1 from public.user_roles where user_id=auth.uid() and role in ('admin','staff')) $$;
+create or replace function public.is_cashier() returns boolean language sql stable security definer set search_path=public as $$ select exists(select 1 from public.user_roles where user_id=auth.uid() and role='cashier') $$;
+create or replace function public.my_roles() returns setof public.app_role language sql stable security definer set search_path=public as $$ select 'admin'::public.app_role where public.is_super_admin() union select role from public.user_roles where user_id=auth.uid() and not public.is_super_admin() $$;
+create policy "roles read" on public.user_roles for select to authenticated using (user_id = auth.uid() or public.is_manager());
+create policy "roles manage ins" on public.user_roles for insert to authenticated with check (public.is_manager());
+create policy "roles manage del" on public.user_roles for delete to authenticated using (public.is_manager());
+create policy "firm isolation" on public.user_roles as restrictive for all to authenticated using (user_id=auth.uid() or exists(select 1 from public.profiles p where p.id=user_roles.user_id and p.firm_id=public.current_firm_id())) with check (exists(select 1 from public.profiles p where p.id=user_roles.user_id and p.firm_id=public.current_firm_id()));
+create table if not exists public.role_permissions (firm_id uuid not null default public.current_firm_id() references public.firms(id) on delete cascade, role public.app_role not null, module text not null check (module in ('clients','services','jobs','recurring','payments','expenses')), can_view boolean not null default false, can_create boolean not null default false, can_edit boolean not null default false, can_delete boolean not null default false, can_amounts boolean not null default false, updated_by uuid default auth.uid(), updated_at timestamptz not null default now(), primary key (firm_id, role, module));
+create index if not exists role_permissions_firm_idx on public.role_permissions(firm_id);
+alter table public.role_permissions enable row level security;
+drop policy if exists "role_permissions read" on public.role_permissions;
+drop policy if exists "role_permissions firm isolation" on public.role_permissions;
+create policy "role_permissions read" on public.role_permissions for select to authenticated using (firm_id=public.current_firm_id());
+create policy "role_permissions firm isolation" on public.role_permissions as restrictive for all to authenticated using (firm_id=public.current_firm_id()) with check (firm_id=public.current_firm_id());
+/* Defaults reproduce the pre-migration behaviour: Admin everything, Staff read the practice modules and progress job status, Cashier records payments. Admin can delete every module except Payments, because payment rows are reversed rather than removed. */
+/* Payments are never deletable for anyone: set_role_permission refuses the grant and the table has no DELETE grant. Admin still deletes Clients, Services, Jobs, Recurring and Expenses, whose ON DELETE RESTRICT foreign keys are what refuse a record with financial history. */
+create or replace function public.permission_defaults(_role public.app_role, _module text) returns table(can_view boolean, can_create boolean, can_edit boolean, can_delete boolean, can_amounts boolean) language sql immutable as $$ select case when _role='admin' then true when _role='cashier' then _module='payments' else true end, case when _role='admin' then true when _role='cashier' then _module='payments' else false end, case when _role='admin' then true when _role='staff' then _module='jobs' else false end, case when _role='admin' then _module<>'payments' else false end, case when _role='admin' then true when _role='cashier' then _module='payments' else false end $$;
+/* can_delete is forced false for payments here as well as in set_role_permission, so a row written by any other path still cannot make has_capability('payments','delete') true. The rule is enforced at the point of use, not only at the point of writing. */
+create or replace function public.effective_permissions(_firm_id uuid, _role public.app_role, _module text) returns table(can_view boolean, can_create boolean, can_edit boolean, can_delete boolean, can_amounts boolean) language sql stable security definer set search_path=public as $$ select coalesce(rp.can_view, d.can_view), coalesce(rp.can_create, d.can_create), coalesce(rp.can_edit, d.can_edit), case when _module='payments' then false else coalesce(rp.can_delete, d.can_delete) end, coalesce(rp.can_amounts, d.can_amounts) from public.permission_defaults(_role, _module) d left join public.role_permissions rp on rp.firm_id=_firm_id and rp.role=_role and rp.module=_module $$;
+create or replace function public.has_capability(_module text, _action text) returns boolean language sql stable security definer set search_path=public as $$ select public.is_manager() or exists (select 1 from public.my_roles() rr cross join lateral public.effective_permissions(public.current_firm_id(), rr, _module) p where case _action when 'view' then p.can_view when 'create' then p.can_create when 'edit' then p.can_edit when 'delete' then p.can_delete when 'amounts' then p.can_amounts else false end) $$;
+create or replace function public.seed_role_permissions(_firm_id uuid) returns void language plpgsql security definer set search_path=public as $$ begin insert into public.role_permissions(firm_id, role, module, can_view, can_create, can_edit, can_delete, can_amounts) select _firm_id, r.role, m.module, d.can_view, d.can_create, d.can_edit, d.can_delete, d.can_amounts from unnest(array['admin','staff','cashier']::public.app_role[]) r(role) cross join unnest(array['clients','services','jobs','recurring','payments','expenses']) m(module) cross join lateral public.permission_defaults(r.role, m.module) d on conflict (firm_id, role, module) do nothing; end $$;
+select public.seed_role_permissions(id) from public.firms;
+/* Returns the stored row for a role+module, creating it from the defaults if it is missing, so that an Admin editing one cell always writes a complete row. */
+create or replace function public.ensure_role_permission(_firm_id uuid, _role public.app_role, _module text) returns void language plpgsql security definer set search_path=public as $$ begin insert into public.role_permissions(firm_id, role, module, can_view, can_create, can_edit, can_delete, can_amounts) select _firm_id, _role, _module, d.can_view, d.can_create, d.can_edit, d.can_delete, d.can_amounts from public.permission_defaults(_role, _module) d on conflict (firm_id, role, module) do nothing; end $$;
+create or replace function public.permission_matrix() returns table(role public.app_role, module text, can_view boolean, can_create boolean, can_edit boolean, can_delete boolean, can_amounts boolean, editable boolean) language plpgsql security definer set search_path=public as $$ begin if not public.is_manager() then raise exception 'Not authorised'; end if; return query select r.role, m.module, coalesce(rp.can_view, d.can_view), coalesce(rp.can_create, d.can_create), coalesce(rp.can_edit, d.can_edit), case when m.module='payments' then false else coalesce(rp.can_delete, d.can_delete) end, coalesce(rp.can_amounts, d.can_amounts), r.role <> 'admin' from unnest(array['admin','staff','cashier']::public.app_role[]) r(role) cross join unnest(array['clients','services','jobs','recurring','payments','expenses']) m(module) cross join lateral public.permission_defaults(r.role, m.module) d left join public.role_permissions rp on rp.firm_id=public.current_firm_id() and rp.role=r.role and rp.module=m.module; end $$;
+create or replace function public.set_role_permission(_role public.app_role, _module text, _view boolean, _create boolean, _edit boolean, _delete boolean, _amounts boolean) returns void language plpgsql security definer set search_path=public as $$ begin if not public.is_manager() then raise exception 'Not authorised'; end if; if _role = 'admin' then raise exception 'The Admin role always has full access and cannot be restricted.'; end if; if _module not in ('clients','services','jobs','recurring','payments','expenses') then raise exception 'Unknown module'; end if; if _delete and _module = 'payments' then raise exception 'Payment records are never deleted. Reverse the payment instead.'; end if; insert into public.role_permissions(firm_id, role, module, can_view, can_create, can_edit, can_delete, can_amounts) values (public.current_firm_id(), _role, _module, coalesce(_view,false), coalesce(_view,false) and coalesce(_create,false), coalesce(_view,false) and coalesce(_edit,false), coalesce(_view,false) and coalesce(_delete,false), coalesce(_view,false) and coalesce(_amounts,false)) on conflict (firm_id, role, module) do update set can_view=excluded.can_view, can_create=excluded.can_create, can_edit=excluded.can_edit, can_delete=excluded.can_delete, can_amounts=excluded.can_amounts, updated_by=auth.uid(), updated_at=now(); insert into public.audit_logs(user_id, action, module, record_id, new_value) values (auth.uid(), 'role_permission_changed', 'role_permissions', _role::text || ':' || _module, jsonb_build_object('view', coalesce(_view,false), 'create', coalesce(_view,false) and coalesce(_create,false), 'edit', coalesce(_view,false) and coalesce(_edit,false), 'delete', coalesce(_view,false) and coalesce(_delete,false), 'amounts', coalesce(_view,false) and coalesce(_amounts,false))); end $$;
+/* Aggregates are computed in the inner grouped query and only assembled into jsonb outside it, because an aggregate may not contain another aggregate. my_roles() is cross joined rather than referenced in the select list so that a user holding several roles gets the union of their grants. */
+create or replace function public.my_permissions() returns jsonb language sql stable security definer set search_path=public as $$ select coalesce(jsonb_object_agg(s.module, jsonb_build_object('view', s.can_view, 'create', s.can_create, 'edit', s.can_edit, 'delete', s.can_delete, 'amounts', s.can_amounts)), '{}'::jsonb) from (select m.module, bool_or(p.can_view) as can_view, bool_or(p.can_create) as can_create, bool_or(p.can_edit) as can_edit, bool_or(p.can_delete) as can_delete, bool_or(p.can_amounts) as can_amounts from unnest(array['clients','services','jobs','recurring','payments','expenses']) m(module) cross join public.my_roles() rr cross join lateral public.effective_permissions(public.current_firm_id(), rr, m.module) p group by m.module) s $$;
+create or replace function public.reset_role_permissions() returns void language plpgsql security definer set search_path=public as $$ begin if not public.is_manager() then raise exception 'Not authorised'; end if; delete from public.role_permissions where firm_id=public.current_firm_id(); perform public.seed_role_permissions(public.current_firm_id()); insert into public.audit_logs(user_id, action, module, record_id, reason) values (auth.uid(), 'role_permissions_reset', 'role_permissions', public.current_firm_id()::text, 'restored defaults'); end $$;
+/* RLS now reads the matrix instead of hard-coded roles. A grant is firm-wide: once Staff can see Clients they see every client, not only assigned ones. */
+drop policy if exists "clients read" on public.clients;
+drop policy if exists "clients ins" on public.clients;
+drop policy if exists "clients upd" on public.clients;
+drop policy if exists "clients del" on public.clients;
+create policy "clients read" on public.clients for select to authenticated using (public.has_capability('clients','view'));
+create policy "clients ins" on public.clients for insert to authenticated with check (public.has_capability('clients','create'));
+create policy "clients upd" on public.clients for update to authenticated using (public.has_capability('clients','edit')) with check (public.has_capability('clients','edit'));
+create policy "clients del" on public.clients for delete to authenticated using (public.has_capability('clients','delete'));
+drop policy if exists "services read" on public.services;
+drop policy if exists "services ins" on public.services;
+drop policy if exists "services upd" on public.services;
+drop policy if exists "services del" on public.services;
+create policy "services read" on public.services for select to authenticated using (public.has_capability('services','view'));
+create policy "services ins" on public.services for insert to authenticated with check (public.has_capability('services','create'));
+create policy "services upd" on public.services for update to authenticated using (public.has_capability('services','edit')) with check (public.has_capability('services','edit'));
+create policy "services del" on public.services for delete to authenticated using (public.has_capability('services','delete'));
+/* client_services carries the retainer schedule, so it answers to either the Recurring module (the /recurring page) or the Clients module (the client detail page). Either grant is enough. */
+drop policy if exists "cs read" on public.client_services;
+drop policy if exists "cs ins" on public.client_services;
+drop policy if exists "cs upd" on public.client_services;
+drop policy if exists "cs del" on public.client_services;
+create policy "cs read" on public.client_services for select to authenticated using (public.has_capability('recurring','view') or public.has_capability('clients','view'));
+create policy "cs ins" on public.client_services for insert to authenticated with check (public.has_capability('recurring','create') or public.has_capability('clients','create'));
+create policy "cs upd" on public.client_services for update to authenticated using (public.has_capability('recurring','edit') or public.has_capability('clients','edit')) with check (public.has_capability('recurring','edit') or public.has_capability('clients','edit'));
+create policy "cs del" on public.client_services for delete to authenticated using (public.has_capability('recurring','delete'));
+drop policy if exists "jobs read" on public.jobs;
+drop policy if exists "jobs ins" on public.jobs;
+drop policy if exists "jobs upd" on public.jobs;
+drop policy if exists "jobs del" on public.jobs;
+create policy "jobs read" on public.jobs for select to authenticated using (public.has_capability('jobs','view'));
+create policy "jobs ins" on public.jobs for insert to authenticated with check (public.has_capability('jobs','create'));
+create policy "jobs upd" on public.jobs for update to authenticated using (public.has_capability('jobs','edit')) with check (public.has_capability('jobs','edit'));
+create policy "jobs del" on public.jobs for delete to authenticated using (public.has_capability('jobs','delete'));
+/* Colleague names are needed to render "Assigned to" on any list the caller can already read, so profiles read follows module access rather than a fixed role list. */
+drop policy if exists "profiles read" on public.profiles;
+create policy "profiles read" on public.profiles for select to authenticated using (id = auth.uid() or public.has_capability('clients','view') or public.has_capability('jobs','view') or public.is_manager());
+/* Payments deliberately have no update policy: allocated_amount and status are moved by allocate_payment / reverse_payment so the totals stay correct. The Payments Edit column therefore gates reversal. */
+drop policy if exists "pay read" on public.payments;
+drop policy if exists "pay ins" on public.payments;
+drop policy if exists "alloc read" on public.payment_allocations;
+drop policy if exists "rev read" on public.payment_reversals;
+create policy "pay read" on public.payments for select to authenticated using (public.has_capability('payments','view'));
+create policy "pay ins" on public.payments for insert to authenticated with check (public.has_capability('payments','create') and created_by=auth.uid());
+create policy "alloc read" on public.payment_allocations for select to authenticated using (public.has_capability('payments','edit'));
+create policy "rev read" on public.payment_reversals for select to authenticated using (public.has_capability('payments','edit'));
+/* The expenses / recurring_payments tables arrive with the job-payment workflow migration, which is not on every database yet. Policies cannot be created against a missing relation, so these are applied only when the table is present; the matrix still lists Expenses as a module and it starts working the moment that migration lands. */
+do $$ begin if to_regclass('public.expenses') is not null then drop policy if exists "expenses read" on public.expenses; drop policy if exists "expenses write" on public.expenses; drop policy if exists "expenses ins" on public.expenses; drop policy if exists "expenses upd" on public.expenses; create policy "expenses read" on public.expenses for select to authenticated using (public.has_capability('expenses','view')); create policy "expenses ins" on public.expenses for insert to authenticated with check (public.has_capability('expenses','create')); create policy "expenses upd" on public.expenses for update to authenticated using (public.has_capability('expenses','edit')) with check (public.has_capability('expenses','edit')); end if; if to_regclass('public.recurring_payments') is not null then drop policy if exists "recurring_payments read" on public.recurring_payments; drop policy if exists "recurring_payments write" on public.recurring_payments; drop policy if exists "recurring_payments ins" on public.recurring_payments; drop policy if exists "recurring_payments upd" on public.recurring_payments; drop policy if exists "recurring_payments del" on public.recurring_payments; create policy "recurring_payments read" on public.recurring_payments for select to authenticated using (public.has_capability('recurring','view')); create policy "recurring_payments ins" on public.recurring_payments for insert to authenticated with check (public.has_capability('recurring','create')); create policy "recurring_payments upd" on public.recurring_payments for update to authenticated using (public.has_capability('recurring','edit')) with check (public.has_capability('recurring','edit')); create policy "recurring_payments del" on public.recurring_payments for delete to authenticated using (public.has_capability('recurring','delete')); end if; end $$;
+/* RLS filters rows, not columns, so a Cashier who may view payments would still receive every amount over PostgREST if the UI read the table directly. These two list RPCs blank the money columns server-side unless the caller holds the module's amounts grant, so the figure genuinely never reaches the browser. */
+/* These six are SECURITY DEFINER, which bypasses RLS, so each one must repeat the
+   firm filter and the view grant itself. Without the firm_id predicate they would
+   return every firm's rows, and has_capability() inside them would still resolve
+   against the CALLER's firm, so the money columns would be unmasked for another
+   firm's data. */
+create or replace function public.payments_list() returns table(id uuid, payment_code text, client_id uuid, job_id uuid, amount numeric, mode text, payment_date date, reference text, narration text, status text, created_at timestamptz) language sql stable security definer set search_path=public as $$ select p.id, p.payment_code, p.client_id, p.job_id, case when public.has_capability('payments','amounts') then p.amount end, p.mode, p.payment_date, p.reference, p.narration, p.status, p.created_at from public.payments p where p.firm_id=public.current_firm_id() and public.has_capability('payments','view') order by p.created_at desc $$;
+create or replace function public.jobs_list() returns table(id uuid, job_code text, client_id uuid, client_name text, service_id uuid, service_name text, client_service_id uuid, title text, period_start date, period_end date, fee numeric, discount numeric, net_amount numeric, due_date date, assigned_staff uuid, assigned_staff_name text, status text, financial_status text, notes text, auto_invoice boolean, created_at timestamptz, invoice_id uuid, invoice_no text, invoice_status text) language sql stable security definer set search_path=public as $$ select j.id, j.job_code, j.client_id, c.name, j.service_id, s.name, j.client_service_id, j.title, j.period_start, j.period_end, case when public.has_capability('jobs','amounts') then j.fee end, case when public.has_capability('jobs','amounts') then j.discount end, case when public.has_capability('jobs','amounts') then j.net_amount end, j.due_date, j.assigned_staff, pf.full_name, j.status, j.financial_status, j.notes, j.auto_invoice, j.created_at, inv.id, inv.invoice_no, inv.status from public.jobs j left join public.clients c on c.id=j.client_id left join public.services s on s.id=j.service_id left join public.profiles pf on pf.id=j.assigned_staff left join lateral (select i.id, i.invoice_no, i.status from public.invoice_items ii join public.invoices i on i.id=ii.invoice_id where ii.job_id=j.id and i.status<>'cancelled' order by i.created_at desc limit 1) inv on true where j.firm_id=public.current_firm_id() and public.has_capability('jobs','view') order by j.due_date asc nulls last $$;
+create or replace function public.recurring_list() returns table(id uuid, client_id uuid, client_name text, service_id uuid, service_name text, agreed_fee numeric, frequency text, start_date date, end_date date, due_days int, assigned_staff uuid, assigned_staff_name text, status text, notes text, auto_invoice boolean, created_at timestamptz) language sql stable security definer set search_path=public as $$ select cs.id, cs.client_id, c.name, cs.service_id, s.name, case when public.has_capability('recurring','amounts') then cs.agreed_fee end, cs.frequency, cs.start_date, cs.end_date, cs.due_days, cs.assigned_staff, pf.full_name, cs.status, cs.notes, cs.auto_invoice, cs.created_at from public.client_services cs left join public.clients c on c.id=cs.client_id left join public.services s on s.id=cs.service_id left join public.profiles pf on pf.id=cs.assigned_staff where cs.firm_id=public.current_firm_id() and public.has_capability('recurring','view') order by cs.created_at $$;
+create or replace function public.client_services_list(_client_id uuid) returns table(id uuid, client_id uuid, service_id uuid, service_name text, service_type text, auto_invoice boolean, agreed_fee numeric, frequency text, start_date date, end_date date, due_days int, assigned_staff uuid, assigned_staff_name text, status text, notes text, created_at timestamptz) language sql stable security definer set search_path=public as $$ select cs.id, cs.client_id, cs.service_id, s.name, s.service_type, s.auto_invoice, case when public.has_capability('recurring','amounts') or public.has_capability('services','amounts') then cs.agreed_fee end, cs.frequency, cs.start_date, cs.end_date, cs.due_days, cs.assigned_staff, pf.full_name, cs.status, cs.notes, cs.created_at from public.client_services cs left join public.services s on s.id=cs.service_id left join public.profiles pf on pf.id=cs.assigned_staff where cs.client_id=_client_id and cs.firm_id=public.current_firm_id() and (public.has_capability('recurring','view') or public.has_capability('clients','view')) order by cs.created_at $$;
+create or replace function public.client_jobs_list(_client_id uuid) returns table(id uuid, job_code text, client_id uuid, service_id uuid, service_name text, title text, period_start date, period_end date, fee numeric, discount numeric, net_amount numeric, due_date date, assigned_staff uuid, assigned_staff_name text, status text, financial_status text, notes text, auto_invoice boolean, created_at timestamptz, invoice_id uuid, invoice_no text, invoice_status text) language sql stable security definer set search_path=public as $$ select j.id, j.job_code, j.client_id, j.service_id, s.name, j.title, j.period_start, j.period_end, case when public.has_capability('jobs','amounts') then j.fee end, case when public.has_capability('jobs','amounts') then j.discount end, case when public.has_capability('jobs','amounts') then j.net_amount end, j.due_date, j.assigned_staff, pf.full_name, j.status, j.financial_status, j.notes, j.auto_invoice, j.created_at, inv.id, inv.invoice_no, inv.status from public.jobs j left join public.services s on s.id=j.service_id left join public.profiles pf on pf.id=j.assigned_staff left join lateral (select i.id, i.invoice_no, i.status from public.invoice_items ii join public.invoices i on i.id=ii.invoice_id where ii.job_id=j.id and i.status<>'cancelled' order by i.created_at desc limit 1) inv on true where j.client_id=_client_id and j.firm_id=public.current_firm_id() and public.has_capability('jobs','view') order by j.created_at desc $$;
+create or replace function public.client_payments_list(_client_id uuid) returns table(id uuid, payment_code text, client_id uuid, job_id uuid, amount numeric, allocated_amount numeric, mode text, payment_date date, reference text, narration text, status text, created_at timestamptz) language sql stable security definer set search_path=public as $$ select p.id, p.payment_code, p.client_id, p.job_id, case when public.has_capability('payments','amounts') then p.amount end, case when public.has_capability('payments','amounts') then p.allocated_amount end, p.mode, p.payment_date, p.reference, p.narration, p.status, p.created_at from public.payments p where p.client_id=_client_id and p.firm_id=public.current_firm_id() and public.has_capability('payments','view') order by p.payment_date desc $$;
+create or replace function public.client_lookup() returns table(id uuid, client_code text, name text) language sql stable security definer set search_path=public as $$ select id, client_code, name from public.clients where status='active' and firm_id=public.current_firm_id() and (public.has_capability('clients','view') or public.has_capability('payments','create')) order by name $$;
+create or replace function public.update_job_status(_job_id uuid, _status text, _reason text) returns void language plpgsql security definer set search_path=public as $$ begin perform public.firm_guard('jobs', _job_id); if not public.has_capability('jobs','edit') then raise exception 'Not authorised'; end if; perform set_config('app.status_reason', coalesce(_reason,''), true); update public.jobs set status=_status where id=_job_id; end $$;
+create or replace function public.generate_recurring_jobs(_upto date) returns integer language plpgsql security definer set search_path=public as $$ declare cs record; ps date; pe date; step interval; n int := 0; svc record; lbl text; begin if not public.has_capability('recurring','edit') then raise exception 'Not authorised'; end if; for cs in select * from public.client_services where status='active' and firm_id=public.current_firm_id() loop select * into svc from public.services where id=cs.service_id; if cs.frequency='one_time' then insert into public.jobs(client_id, service_id, client_service_id, title, period_start, period_end, fee, due_date, assigned_staff, created_by) values (cs.client_id, cs.service_id, cs.id, svc.name, cs.start_date, cs.start_date, cs.agreed_fee, cs.start_date + cs.due_days, cs.assigned_staff, auth.uid()) on conflict do nothing; if found then n := n + 1; end if; continue; end if; step := case cs.frequency when 'monthly' then interval '1 month' when 'quarterly' then interval '3 months' when 'half_yearly' then interval '6 months' else interval '1 year' end; ps := date_trunc('month', cs.start_date)::date; while ps <= _upto and (cs.end_date is null or ps <= cs.end_date) loop pe := (ps + step - interval '1 day')::date; lbl := case cs.frequency when 'monthly' then to_char(ps,'Mon YYYY') when 'yearly' then 'FY ' || to_char(ps,'YYYY') else to_char(ps,'Mon YYYY') || ' – ' || to_char(pe,'Mon YYYY') end; insert into public.jobs(client_id, service_id, client_service_id, title, period_start, period_end, fee, due_date, assigned_staff, created_by) values (cs.client_id, cs.service_id, cs.id, svc.name || ' – ' || lbl, ps, pe, cs.agreed_fee, pe + cs.due_days, cs.assigned_staff, auth.uid()) on conflict do nothing; if found then n := n + 1; end if; ps := (ps + step)::date; end loop; end loop; return n; end $$;
+create or replace function public.reverse_payment(_payment_id uuid, _reason text) returns void language plpgsql security definer set search_path=public as $$ declare r record; begin if not public.has_capability('payments','edit') then raise exception 'Not authorised'; end if; perform public.firm_guard('payments', _payment_id); if coalesce(trim(_reason),'') = '' then raise exception 'Reason is required'; end if; if exists(select 1 from public.payments where id=_payment_id and status='reversed') then raise exception 'Already reversed'; end if; update public.payments set status='reversed' where id=_payment_id; for r in select id from public.payment_allocations where payment_id=_payment_id and not reversed loop update public.payment_allocations set reversed=true, reversed_at=now() where id=r.id; end loop; insert into public.payment_reversals(payment_id, reason, reversed_by) values (_payment_id, _reason, auth.uid()); perform public.recalc_payment(_payment_id); end $$;
+create or replace function public.reverse_allocation(_allocation_id uuid, _reason text) returns void language plpgsql security definer set search_path=public as $$ begin if not public.has_capability('payments','edit') then raise exception 'Not authorised'; end if; perform public.firm_guard('payment_allocations', _allocation_id); update public.payment_allocations set reversed=true, reversed_at=now() where id=_allocation_id and not reversed; insert into public.audit_logs(user_id, action, module, record_id, reason) values (auth.uid(),'allocation_reversed','payment_allocations',_allocation_id::text,_reason); end $$;
+do $$ begin if to_regclass('public.expenses') is not null then execute $f$ create or replace function public.delete_expense(_expense_id uuid, _reason text) returns void language plpgsql security definer set search_path=public as $b$ begin if not public.has_capability('expenses','delete') then raise exception 'Not authorised'; end if; if coalesce(btrim(_reason),'')='' then raise exception 'Reason is required'; end if; perform public.firm_guard('expenses', _expense_id); delete from public.expenses where id=_expense_id; insert into public.audit_logs(user_id, action, module, record_id, reason) values (auth.uid(),'expense_deleted','expenses',_expense_id::text,_reason); end $b$ $f$; end if; end $$;
+create or replace function public.create_firm(_name text, _owner_email text, _phone text, _city text, _logo_url text) returns uuid language plpgsql security definer set search_path=public as $$ declare fid uuid; begin if not public.is_super_admin() then raise exception 'Not authorised'; end if; if coalesce(trim(_name),'')='' then raise exception 'Firm name is required'; end if; insert into public.firms(name, owner_email, phone, city, logo_url) values (trim(_name), lower(trim(_owner_email)), _phone, _city, _logo_url) returning id into fid; insert into public.settings(firm_id, firm_name, phone, email) values (fid, trim(_name), _phone, lower(trim(_owner_email))); perform public.seed_role_permissions(fid); return fid; end $$;
+grant delete on public.clients, public.services, public.jobs, public.client_services to authenticated;
+do $$ begin if to_regclass('public.recurring_payments') is not null then execute 'grant delete on public.recurring_payments to authenticated'; end if; end $$;
+do $$ begin if to_regclass('public.expenses') is not null then execute 'revoke delete on public.expenses from authenticated'; end if; if to_regclass('public.job_clearing') is not null then execute 'revoke delete on public.job_clearing from authenticated'; end if; end $$;
+revoke delete on public.payments, public.invoices, public.invoice_items, public.discounts, public.payment_allocations, public.payment_reversals from authenticated;
+revoke execute on function public.permission_defaults(public.app_role, text), public.effective_permissions(uuid, public.app_role, text), public.seed_role_permissions(uuid) from public, anon;
+grant all on public.role_permissions to service_role;
+/* has_capability must stay executable for authenticated: RLS policy expressions are evaluated with the querying user's privileges, so revoking it would make every module error out rather than merely stay locked. */
+grant execute on function public.payments_list(), public.jobs_list(), public.recurring_list(), public.client_services_list(uuid), public.client_jobs_list(uuid), public.client_payments_list(uuid), public.has_capability(text, text), public.my_permissions(), public.permission_matrix(), public.set_role_permission(public.app_role, text, boolean, boolean, boolean, boolean, boolean), public.reset_role_permissions(), public.has_role(uuid, public.app_role), public.my_roles(), public.client_lookup(), public.update_job_status(uuid, text, text), public.generate_recurring_jobs(date), public.reverse_payment(uuid, text), public.reverse_allocation(uuid, text) to authenticated;
+do $$ begin if to_regclass('public.expenses') is not null then execute 'grant execute on function public.delete_expense(uuid, text) to authenticated'; end if; end $$;
+-- ===== Migration 20261006160000_sequential_master_codes.sql =====
+/* ==========================================================================
+   Sequential master numbering: clients and services count 1, 2, 3...
+
+   Both codes keep their CL0001 / SV001 shape; what changes is where the numbers
+   come from. They were previously drawn from a single global sequence per table,
+   which produced two problems:
+
+   1. The numbers were not contiguous. Deleting a client left a gap, and the
+      next client was CL0028 after CL0020, which reads as random rather than
+      sequential to anyone looking at the list.
+   2. The sequence was global across all firms, so a second firm started at
+      CL0029 and two firms could never both hold "CL0001".
+
+   Numbers are now per firm, allocated by next_master_code() from doc_counters,
+   which the document-numbering migration already introduced. Clients and
+   services use the sentinel period 'ALL' because they never reset on a period
+   boundary the way an invoice number does; only the firm and kind separate them.
+
+   Existing rows are renumbered 1..N per firm in creation order, so the sequence
+   is contiguous from the start rather than starting again after the old codes.
+   This is safe because nothing references these columns by value: client_code
+   and service_code are display labels, and every foreign key points at the uuid.
+   Import/export reads client_code only to map a spreadsheet row back to a uuid,
+   and it looks the value up at export time rather than storing it.
+
+   The global UNIQUE constraints become per-firm composite indexes, matching what
+   jobs/invoices/payments already do.
+
+   Paste-safe: no line comments and no blank lines, because the Supabase SQL
+   editor strips newlines and would otherwise swallow the rest of the script.
+   ========================================================================== */
+alter table public.doc_counters drop constraint if exists doc_counters_kind_check;
+alter table public.doc_counters add constraint doc_counters_kind_check check (kind in ('INV','REC','JOB','CLI','SVC'));
+alter table public.doc_counters drop constraint if exists doc_counters_period_check;
+alter table public.doc_counters add constraint doc_counters_period_check check (period ~ '^[0-9]{4}$' or period = 'ALL');
+create or replace function public.next_master_code(_kind text) returns text language plpgsql security definer set search_path=public as $$
+declare v_no int; v_prefix text; v_width int;
+begin
+  if _kind = 'CLI' then v_prefix := 'CL'; v_width := 4;
+  elsif _kind = 'SVC' then v_prefix := 'SV'; v_width := 3;
+  else raise exception 'Unknown master kind: %', _kind;
+  end if;
+  insert into public.doc_counters as c (firm_id, kind, period, last_no) values (public.current_firm_id(), _kind, 'ALL', 1)
+  on conflict (firm_id, kind, period) do update set last_no = c.last_no + 1 returning last_no into v_no;
+  return v_prefix || lpad(v_no::text, v_width, '0');
+end $$;
+revoke execute on function public.next_master_code(text) from public, anon, authenticated;
+/* One function serves both tables. The row is read as jsonb and written back,
+   because plpgsql resolves new.<column> against the live row type: naming
+   service_code while the trigger fires on clients raises "record new has no
+   field service_code" at runtime. */
+create or replace function public.stamp_master_code() returns trigger language plpgsql security definer set search_path=public as $$
+declare v_code text; v_col text; v_kind text;
+begin
+  if tg_table_name = 'clients' then v_col := 'client_code'; v_kind := 'CLI';
+  elsif tg_table_name = 'services' then v_col := 'service_code'; v_kind := 'SVC';
+  else return new;
+  end if;
+  if coalesce(btrim(to_jsonb(new)->>v_col), '') = '' then
+    v_code := public.next_master_code(v_kind);
+    new := jsonb_populate_record(new, jsonb_build_object(v_col, v_code));
+  end if;
+  return new;
+end $$;
+alter table public.clients alter column client_code drop default;
+alter table public.services alter column service_code drop default;
+drop trigger if exists clients_stamp_master_code on public.clients;
+create trigger clients_stamp_master_code before insert on public.clients for each row execute function public.stamp_master_code();
+drop trigger if exists services_stamp_master_code on public.services;
+create trigger services_stamp_master_code before insert on public.services for each row execute function public.stamp_master_code();
+drop index if exists public.clients_client_code_firm_uniq;
+drop index if exists public.services_service_code_firm_uniq;
+do $$ declare c record; begin for c in select conname from pg_constraint where conrelid = 'public.clients'::regclass and contype = 'u' loop execute format('alter table public.clients drop constraint %I', c.conname); end loop; for c in select conname from pg_constraint where conrelid = 'public.services'::regclass and contype = 'u' loop execute format('alter table public.services drop constraint %I', c.conname); end loop; execute 'create unique index clients_client_code_firm_uniq on public.clients(firm_id, client_code)'; execute 'create unique index services_service_code_firm_uniq on public.services(firm_id, service_code)'; end $$;
+/* Renumber to CL0001.. / SV001.. per firm in creation order, so the sequence is
+   contiguous from the start instead of continuing from the old global numbers. */
+with ranked as (select id, row_number() over (partition by firm_id order by created_at, id)::int as rn from public.clients)
+update public.clients c set client_code = 'CL' || lpad(ranked.rn::text, 4, '0') from ranked where c.id = ranked.id;
+with ranked as (select id, row_number() over (partition by firm_id order by created_at, id)::int as rn from public.services)
+update public.services s set service_code = 'SV' || lpad(ranked.rn::text, 3, '0') from ranked where s.id = ranked.id;
+insert into public.doc_counters (firm_id, kind, period, last_no)
+select f.id, k.kind, 'ALL',
+  case k.kind when 'CLI' then coalesce((select count(*) from public.clients c where c.firm_id=f.id), 0)
+              else coalesce((select count(*) from public.services s where s.firm_id=f.id), 0) end
+from public.firms f
+cross join (values ('CLI'),('SVC')) k(kind)
+on conflict (firm_id, kind, period) do update set last_no = excluded.last_no;
+
+-- ===== Migration 20261006170000_expenses_module.sql =====
+/* ==========================================================================
+   Expenses module: one ledger for every kind of money the firm leaves, and a
+   read-only view of it on the job's Payment Clearing screen.
+
+   Why a "kind" column: the two cases behave differently and mixing them in one
+   undifferentiated list makes the total meaningless. An overhead (rent,
+   stationery) is the firm's own cost. A "tax" row is TDS deducted from a client
+   and remitted to the government on their behalf, so it leaves the bank but was
+   never the firm's money. A reimbursement is money paid out on a client's
+   behalf and rebilled to them. Only overhead is a true cost, so the reporting
+   groups by kind rather than pretending the sum is a single number.
+
+   Two rules this file is responsible for:
+
+   1. Expenses answer to the permission matrix, not to the old fixed roles. The
+      job-payment workflow migration created these policies before role_permissions
+      existed, so without this file the Expenses page would ignore the Admin's
+      choices entirely.
+
+   2. Expense amounts are masked server-side by expenses_list(), for the same
+      reason payments and jobs are: RLS cannot hide a column, so a role that may
+      see the record would otherwise still receive every amount.
+
+   Deletion goes through delete_expense(id, reason) rather than a plain DELETE,
+   because nothing references an expense row and no other table would leave a
+   trace of its removal. A reason is mandatory and lands in audit_logs.
+
+   Paste-safe: no line comments and no blank lines, because the Supabase SQL
+   editor strips newlines and would otherwise swallow the rest of the script.
+   ========================================================================== */
+alter table public.expenses add column if not exists kind text not null default 'overhead';
+alter table public.expenses drop constraint if exists expenses_kind_check;
+alter table public.expenses add constraint expenses_kind_check check (kind in ('overhead','tax','reimbursement'));
+create index if not exists expenses_job_idx2 on public.expenses(job_id);
+create index if not exists expenses_kind_idx on public.expenses(firm_id, kind, expense_date desc);
+drop policy if exists "expenses read" on public.expenses;
+drop policy if exists "expenses write" on public.expenses;
+create policy "expenses read" on public.expenses for select to authenticated using (public.has_capability('expenses','view'));
+create policy "expenses ins" on public.expenses for insert to authenticated with check (public.has_capability('expenses','create'));
+create policy "expenses upd" on public.expenses for update to authenticated using (public.has_capability('expenses','edit')) with check (public.has_capability('expenses','edit'));
+/* A direct DELETE is never granted; the RPC below is the only route, so the
+   mandatory reason cannot be bypassed. */
+revoke delete on public.expenses from authenticated;
+drop policy if exists "recurring_payments read" on public.recurring_payments;
+drop policy if exists "recurring_payments write" on public.recurring_payments;
+create policy "recurring_payments read" on public.recurring_payments for select to authenticated using (public.has_capability('recurring','view'));
+create policy "recurring_payments ins" on public.recurring_payments for insert to authenticated with check (public.has_capability('recurring','create'));
+create policy "recurring_payments upd" on public.recurring_payments for update to authenticated using (public.has_capability('recurring','edit')) with check (public.has_capability('recurring','edit'));
+create or replace function public.expenses_list() returns table(id uuid, kind text, expense_date date, category text, description text, amount numeric, mode text, reference text, paid_to text, notes text, client_id uuid, client_name text, job_id uuid, job_code text, created_at timestamptz) language sql stable security definer set search_path=public as $$ select e.id, e.kind, e.expense_date, e.category, e.description, case when public.has_capability('expenses','amounts') then e.amount end, e.mode, e.reference, e.paid_to, e.notes, e.client_id, c.name, e.job_id, j.job_code, e.created_at from public.expenses e left join public.clients c on c.id=e.client_id left join public.jobs j on j.id=e.job_id where e.firm_id=public.current_firm_id() and public.has_capability('expenses','view') order by e.expense_date desc, e.created_at desc $$;
+/* Read-only projection for the Payment Clearing screen. It reports what has been
+   recorded against the job but deliberately does not feed job_clearing, so an
+   expense can never move final_amount or the invoice total behind the user's back. */
+create or replace function public.expenses_for_job(_job_id uuid) returns table(id uuid, kind text, category text, description text, amount numeric, mode text, paid_to text, reference text, expense_date date) language sql stable security definer set search_path=public as $$ select e.id, e.kind, e.category, e.description, case when public.has_capability('expenses','amounts') then e.amount end, e.mode, e.paid_to, e.reference, e.expense_date from public.expenses e where e.job_id=_job_id and e.firm_id=public.current_firm_id() and public.has_capability('expenses','view') order by e.expense_date desc $$;
+create or replace function public.delete_expense(_expense_id uuid, _reason text) returns void language plpgsql security definer set search_path=public as $$ begin if not public.has_capability('expenses','delete') then raise exception 'Not authorised'; end if; if coalesce(btrim(_reason),'')='' then raise exception 'Reason is required'; end if; perform public.firm_guard('expenses', _expense_id); delete from public.expenses where id=_expense_id; insert into public.audit_logs(user_id, action, module, record_id, reason) values (auth.uid(),'expense_deleted','expenses',_expense_id::text,_reason); end $$;
+grant execute on function public.expenses_list(), public.expenses_for_job(uuid), public.delete_expense(uuid, text) to authenticated;
