@@ -14,6 +14,11 @@ import {
   Trash2,
   Lock,
   ShieldAlert,
+  Link2,
+  Check,
+  Copy,
+  ExternalLink,
+  Sparkles,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -53,6 +58,7 @@ function AdminPage() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [inviteFor, setInviteFor] = useState<{ id: string; name: string } | null>(null);
+  const [generateLinkOpen, setGenerateLinkOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [term, setTerm] = useState("");
   const runDelete = useServerFn(deleteFirm);
@@ -126,10 +132,16 @@ function AdminPage() {
         title="Firms Console"
         subtitle="Every firm on your platform, in one place"
         actions={
-          <Button onClick={() => setOpen(true)}>
-            <Plus className="mr-1.5 h-4 w-4" />
-            New Firm
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setGenerateLinkOpen(true)}>
+              <Link2 className="mr-1.5 h-4 w-4 text-primary" />
+              Generate Access Link
+            </Button>
+            <Button onClick={() => setOpen(true)}>
+              <Plus className="mr-1.5 h-4 w-4" />
+              New Firm
+            </Button>
+          </div>
         }
       />
 
@@ -277,7 +289,7 @@ function AdminPage() {
                       className="h-8 text-xs font-normal"
                       onClick={() => setInviteFor({ id: f.id, name: f.name })}
                     >
-                      Invite user
+                      Invite / Link
                     </Button>
                     <Button
                       size="sm"
@@ -340,6 +352,7 @@ function AdminPage() {
 
       <NewFirmDialog open={open} onOpenChange={setOpen} />
       <InviteDialog firm={inviteFor} onClose={() => setInviteFor(null)} />
+      <InviteDialog open={generateLinkOpen} onClose={() => setGenerateLinkOpen(false)} />
     </div>
   );
 }
@@ -356,8 +369,32 @@ function NewFirmDialog({
   const [f, setF] = useState({ name: "", ownerName: "", ownerEmail: "", phone: "", city: "" });
   const [logo, setLogo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [createdResult, setCreatedResult] = useState<{
+    link: string;
+    email: string;
+    firmName: string;
+  } | null>(null);
+  const [copied, setCopied] = useState(false);
+
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) =>
     setF((p) => ({ ...p, [k]: e.target.value }));
+
+  const resetAll = () => {
+    setF({ name: "", ownerName: "", ownerEmail: "", phone: "", city: "" });
+    setLogo(null);
+    setCreatedResult(null);
+    setCopied(false);
+    onOpenChange(false);
+  };
+
+  const copyLink = () => {
+    if (!createdResult?.link) return;
+    navigator.clipboard.writeText(createdResult.link);
+    setCopied(true);
+    toast.success("Owner activation link copied to clipboard!");
+    setTimeout(() => setCopied(false), 2500);
+  };
+
   const save = async () => {
     if (f.name.trim().length < 2) return toast.error("Firm name is required");
     if (!/^\S+@\S+\.\S+$/.test(f.ownerEmail)) return toast.error("Valid owner email is required");
@@ -370,74 +407,154 @@ function NewFirmDialog({
           redirectTo: `${window.location.origin}/set-password`,
         },
       });
-      toast.success(
-        r.status === "invited"
-          ? `Firm created — invite sent to ${f.ownerEmail}`
-          : "Firm created and existing account linked",
-      );
       qc.invalidateQueries({ queryKey: ["firm-overview"] });
-      setF({ name: "", ownerName: "", ownerEmail: "", phone: "", city: "" });
-      setLogo(null);
-      onOpenChange(false);
+
+      if (r.inviteLink) {
+        setCreatedResult({
+          link: r.inviteLink,
+          email: f.ownerEmail,
+          firmName: f.name,
+        });
+        toast.success(`Firm "${f.name}" created successfully!`);
+      } else {
+        toast.success(
+          r.status === "invited"
+            ? `Firm created — invite sent to ${f.ownerEmail}`
+            : "Firm created and existing account linked",
+        );
+        resetAll();
+      }
     } catch (e) {
       toast.error(errMsg(e));
     } finally {
       setBusy(false);
     }
   };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(o) => !o && resetAll()}>
       <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Create a new firm</DialogTitle>
-          <DialogDescription>
-            The Admin gets an email to set their password and sign in.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-3.5">
-          <AvatarPicker name={f.name} value={logo} onChange={setLogo} square />
-          <Field label="Firm name">
-            <Input
-              required
-              value={f.name}
-              onChange={set("name")}
-              placeholder="e.g. Mehta & Associates"
-            />
-          </Field>
-          <Field label="Owner full name">
-            <Input
-              required
-              value={f.ownerName}
-              onChange={set("ownerName")}
-              placeholder="e.g. Rajesh Kumar"
-            />
-          </Field>
-          <Field label="Owner email">
-            <Input
-              required
-              type="email"
-              value={f.ownerEmail}
-              onChange={set("ownerEmail")}
-              placeholder="ca.owner@firm.com"
-            />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Phone">
-              <Input value={f.phone} onChange={set("phone")} placeholder="+91 98765 43210" />
-            </Field>
-            <Field label="City">
-              <Input value={f.city} onChange={set("city")} placeholder="e.g. Mumbai" />
-            </Field>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button onClick={save} disabled={busy}>
-            {busy ? "Creating…" : "Create firm"}
-          </Button>
-        </DialogFooter>
+        {createdResult ? (
+          <>
+            <DialogHeader>
+              <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600">
+                <Sparkles className="h-6 w-6" />
+              </div>
+              <DialogTitle className="text-center">Firm Created: {createdResult.firmName}</DialogTitle>
+              <DialogDescription className="text-center">
+                Owner account created for{" "}
+                <span className="font-semibold text-foreground">{createdResult.email}</span>.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-3 pt-2">
+              <div className="rounded-lg border border-border/60 bg-muted/40 p-3 space-y-2">
+                <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
+                  <span className="flex items-center gap-1.5">
+                    <Link2 className="h-3.5 w-3.5 text-primary" /> Direct Owner Login Link:
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={createdResult.link}
+                    readOnly
+                    onFocus={(e) => e.target.select()}
+                    className="font-mono text-xs select-all bg-background border-border/80"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={copyLink}
+                    className="shrink-0 gap-1.5"
+                  >
+                    {copied ? (
+                      <Check className="h-4 w-4 text-emerald-500" />
+                    ) : (
+                      <Copy className="h-4 w-4" />
+                    )}
+                    {copied ? "Copied" : "Copy"}
+                  </Button>
+                </div>
+              </div>
+
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Share this direct login link with the firm owner. They can click it to immediately activate their account, set their password, and access PracticeDesk.
+              </p>
+
+              <div className="pt-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => window.open(createdResult.link, "_blank", "noopener,noreferrer")}
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  Open in New Tab / Test Login
+                </Button>
+              </div>
+            </div>
+
+            <DialogFooter className="mt-4">
+              <Button onClick={resetAll} className="w-full">
+                Done
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle>Create a new firm</DialogTitle>
+              <DialogDescription>
+                A direct activation link will be generated for the firm owner.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3.5">
+              <AvatarPicker name={f.name} value={logo} onChange={setLogo} square />
+              <Field label="Firm name">
+                <Input
+                  required
+                  value={f.name}
+                  onChange={set("name")}
+                  placeholder="e.g. Mehta & Associates"
+                />
+              </Field>
+              <Field label="Owner full name">
+                <Input
+                  required
+                  value={f.ownerName}
+                  onChange={set("ownerName")}
+                  placeholder="e.g. Rajesh Kumar"
+                />
+              </Field>
+              <Field label="Owner email">
+                <Input
+                  required
+                  type="email"
+                  value={f.ownerEmail}
+                  onChange={set("ownerEmail")}
+                  placeholder="ca.owner@firm.com"
+                />
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Phone">
+                  <Input value={f.phone} onChange={set("phone")} placeholder="+91 98765 43210" />
+                </Field>
+                <Field label="City">
+                  <Input value={f.city} onChange={set("city")} placeholder="e.g. Mumbai" />
+                </Field>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button onClick={save} disabled={busy}>
+                {busy ? "Creating…" : "Create firm"}
+              </Button>
+            </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

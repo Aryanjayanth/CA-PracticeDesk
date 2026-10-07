@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -8,10 +9,11 @@ import { NoAccess, PageHeader } from "@/components/app/common";
 import { useRoles, ROLES, type Role } from "@/hooks/use-roles";
 import { errMsg, fmtDate, label } from "@/lib/format";
 import { useState } from "react";
-import { UserPlus } from "lucide-react";
+import { UserPlus, Link2, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCurrentFirm } from "@/hooks/use-firm";
 import { InviteDialog } from "@/components/app/InviteDialog";
+import { generateLoginLink } from "@/lib/firms.functions";
 
 export const Route = createFileRoute("/_authenticated/users")({
   head: () => ({
@@ -27,7 +29,10 @@ function UsersPage() {
   const { isManager, loading } = useRoles();
   const { data: firm } = useCurrentFirm();
   const [invite, setInvite] = useState(false);
+  const [generatingFor, setGeneratingFor] = useState<string | null>(null);
   const qc = useQueryClient();
+  const runGenLink = useServerFn(generateLoginLink);
+
   const q = useQuery({
     queryKey: ["users-roles"],
     enabled: isManager,
@@ -43,6 +48,7 @@ function UsersPage() {
       }));
     },
   });
+
   if (loading) return null;
   if (!isManager) return <NoAccess />;
 
@@ -53,6 +59,27 @@ function UsersPage() {
     if (error) return toast.error(errMsg(error));
     toast.success(`${label(role)} ${on ? "granted" : "removed"}`);
     qc.invalidateQueries();
+  };
+
+  const copyUserLink = async (userEmail: string) => {
+    setGeneratingFor(userEmail);
+    try {
+      const res = await runGenLink({
+        data: {
+          email: userEmail,
+          firmId: firm?.id,
+          redirectTo: `${window.location.origin}/set-password`,
+        },
+      });
+      if (res.link) {
+        await navigator.clipboard.writeText(res.link);
+        toast.success(`Direct login link for ${userEmail} copied to clipboard!`);
+      }
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setGeneratingFor(null);
+    }
   };
 
   return (
@@ -101,6 +128,23 @@ function UsersPage() {
               />
             ),
           })),
+          {
+            key: "link",
+            header: "Direct Link",
+            render: (u: { email: string }) => (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+                disabled={generatingFor === u.email || !u.email}
+                onClick={() => copyUserLink(u.email)}
+                title="Copy direct login / password reset link"
+              >
+                <Link2 className="h-3.5 w-3.5" />
+                {generatingFor === u.email ? "Generating…" : "Copy Link"}
+              </Button>
+            ),
+          },
         ]}
       />
     </div>

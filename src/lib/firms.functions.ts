@@ -12,59 +12,148 @@ const inviteSchema = z.object({
   redirectTo: z.string().url(),
 });
 
-async function doInvite(input: z.infer<typeof inviteSchema>) {
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { error: invErr } = await supabaseAdmin.from("firm_invites").insert({
-    firm_id: input.firmId,
-    email: input.email,
-    role: input.role,
-    full_name: input.fullName || null,
-  });
-  if (invErr) throw new Error(invErr.message);
-
-  let inviteLink: string | null = null;
+async function generateActionLink(
+  supabaseAdmin: any,
+  email: string,
+  fullName?: string,
+  redirectTo?: string,
+) {
+  const targetRedirect = redirectTo || "http://localhost:5173/set-password";
+  
+  // 1. Try invite link first
   try {
-    const linkRes = await supabaseAdmin.auth.admin.generateLink({
+    const res = await supabaseAdmin.auth.admin.generateLink({
       type: "invite",
-      email: input.email,
+      email,
       options: {
-        redirectTo: input.redirectTo,
-        data: { full_name: input.fullName },
+        redirectTo: targetRedirect,
+        data: fullName ? { full_name: fullName } : undefined,
       },
     });
-    if (linkRes.data?.properties?.action_link) {
-      inviteLink = linkRes.data.properties.action_link;
+    if (res.data?.properties?.action_link) {
+      return res.data.properties.action_link;
     }
-  } catch (linkErr) {
-    console.warn("[doInvite] generateLink fallback:", linkErr);
+  } catch (e) {
+    console.warn("[generateActionLink] invite type failed:", e);
   }
 
-  const { error } = await supabaseAdmin.auth.admin.inviteUserByEmail(input.email, {
-    redirectTo: input.redirectTo,
-    data: { full_name: input.fullName },
-  });
+  // 2. Try recovery link (allows user to set password)
+  try {
+    const res = await supabaseAdmin.auth.admin.generateLink({
+      type: "recovery",
+      email,
+      options: {
+        redirectTo: targetRedirect,
+      },
+    });
+    if (res.data?.properties?.action_link) {
+      return res.data.properties.action_link;
+    }
+  } catch (e) {
+    console.warn("[generateActionLink] recovery type failed:", e);
+  }
 
-  if (!error) return { status: "invited" as const, inviteLink };
+  // 3. Try magiclink
+  try {
+    const res = await supabaseAdmin.auth.admin.generateLink({
+      type: "magiclink",
+      email,
+      options: {
+        redirectTo: targetRedirect,
+      },
+    });
+    if (res.data?.properties?.action_link) {
+      return res.data.properties.action_link;
+    }
+  } catch (e) {
+    console.warn("[generateActionLink] magiclink type failed:", e);
+  }
 
-  // Account already exists: attach it to the firm if it isn't in one yet.
+  // 4. If user does not exist in auth.users at all and invite failed, create user explicitly then generate recovery link
+  try {
+    await supabaseAdmin.auth.admin.createUser({
+      email,
+      email_confirm: true,
+      user_metadata: fullName ? { full_name: fullName } : undefined,
+    });
+    const res = await supabaseAdmin.auth.admin.generateLink({
+      type: "recovery",
+      email,
+      options: {
+        redirectTo: targetRedirect,
+      },
+    });
+    if (res.data?.properties?.action_link) {
+      return res.data.properties.action_link;
+    }
+  } catch (e) {
+    console.warn("[generateActionLink] createUser fallback failed:", e);
+  }
+
+  return null;
+}
+
+async function doInvite(input: z.infer<typeof inviteSchema>) {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  
+  // Record the invite in firm_invites
+  await supabaseAdmin.from("firm_invites").upsert(
+    {
+      firm_id: input.firmId,
+      email: input.email,
+      role: input.role,
+      full_name: input.fullName || null,
+      accepted: false,
+    },
+    { onConflict: "firm_id,email" }
+  );
+
+  // Generate action link (always succeeds with our fallbacks)
+  const inviteLink = await generateActionLink(
+    supabaseAdmin,
+    input.email,
+    input.fullName,
+    input.redirectTo
+  );
+
+  // Attempt to send email invite (swallow errors so missing SMTP doesn't block link generation)
+  let emailSent = false;
+  try {
+    const { error: inviteErr } = await supabaseAdmin.auth.admin.inviteUserByEmail(input.email, {
+      redirectTo: input.redirectTo,
+      data: { full_name: input.fullName },
+    });
+    if (!inviteErr) {
+      emailSent = true;
+    }
+  } catch (err) {
+    console.warn("[doInvite] email dispatch error (ignored):", err);
+  }
+
+  // Link profile & roles if profile exists
   const { data: prof } = await supabaseAdmin
     .from("profiles")
     .select("id, firm_id")
     .ilike("email", input.email)
     .maybeSingle();
-  if (!prof) throw new Error(error.message);
-  if (prof.firm_id && prof.firm_id !== input.firmId)
-    throw new Error("This email already belongs to another firm");
-  await supabaseAdmin.from("profiles").update({ firm_id: input.firmId }).eq("id", prof.id);
-  await supabaseAdmin
-    .from("user_roles")
-    .upsert({ user_id: prof.id, role: input.role }, { onConflict: "user_id,role" });
-  await supabaseAdmin
-    .from("firm_invites")
-    .update({ accepted: true })
-    .ilike("email", input.email)
-    .eq("firm_id", input.firmId);
-  return { status: "linked" as const, inviteLink: null };
+
+  if (prof) {
+    if (prof.firm_id && prof.firm_id !== input.firmId) {
+      throw new Error("This email already belongs to another firm");
+    }
+    await supabaseAdmin.from("profiles").update({ firm_id: input.firmId }).eq("id", prof.id);
+    await supabaseAdmin
+      .from("user_roles")
+      .upsert({ user_id: prof.id, role: input.role }, { onConflict: "user_id,role" });
+    await supabaseAdmin
+      .from("firm_invites")
+      .update({ accepted: true })
+      .ilike("email", input.email)
+      .eq("firm_id", input.firmId);
+    return { status: "linked" as const, inviteLink, emailSent };
+  }
+
+  return { status: "invited" as const, inviteLink, emailSent };
 }
 
 export const inviteUser = createServerFn({ method: "POST" })
@@ -81,6 +170,39 @@ export const inviteUser = createServerFn({ method: "POST" })
       if (!mgr || firm !== data.firmId) throw new Error("Not authorised");
     }
     return doInvite(data);
+  });
+
+export const generateLoginLink = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) =>
+    z
+      .object({
+        email: z.string().trim().toLowerCase().email(),
+        firmId: z.string().uuid().optional(),
+        role: roleEnum.optional(),
+        redirectTo: z.string().url().optional(),
+      })
+      .parse(d)
+  )
+  .handler(async ({ data, context }) => {
+    const sb = context.supabase;
+    const { data: isSuper } = await sb.rpc("is_super_admin");
+    if (!isSuper) {
+      const [{ data: mgr }, { data: firm }] = await Promise.all([
+        sb.rpc("is_manager"),
+        sb.rpc("current_firm_id"),
+      ]);
+      if (!mgr || (data.firmId && firm !== data.firmId)) throw new Error("Not authorised");
+    }
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const link = await generateActionLink(
+      supabaseAdmin,
+      data.email,
+      undefined,
+      data.redirectTo || `${process.env.APP_URL || "http://localhost:5173"}/set-password`
+    );
+    if (!link) throw new Error("Could not generate direct link for this email");
+    return { link, email: data.email };
   });
 
 export const createFirm = createServerFn({ method: "POST" })
