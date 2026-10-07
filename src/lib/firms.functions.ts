@@ -317,13 +317,39 @@ export const verifyOtpAndSetPassword = createServerFn({ method: "POST" })
       console.warn("[verifyOtpAndSetPassword] DB lookup error:", err);
     }
 
-    // 2. Look up Auth User
-    const { data: usersData, error: listErr } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
-    if (listErr) console.error("[verifyOtpAndSetPassword] listUsers error:", listErr);
+    // 2. Look up Auth User & Profile
+    let userId: string | undefined;
+    let existingUser: any = null;
 
-    const existingUser = usersData?.users?.find(
-      (u) => u.email?.toLowerCase() === email
-    );
+    try {
+      const { data: usersData } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+      existingUser = usersData?.users?.find(
+        (u) => u.email?.toLowerCase() === email
+      );
+      if (existingUser) {
+        userId = existingUser.id;
+      }
+    } catch (listErr) {
+      console.warn("[verifyOtpAndSetPassword] listUsers warn:", listErr);
+    }
+
+    // Fallback: check profiles table by email
+    if (!userId) {
+      try {
+        const { data: prof } = await supabaseAdmin
+          .from("profiles")
+          .select("id, full_name, firm_id")
+          .ilike("email", email)
+          .maybeSingle();
+        if (prof) {
+          userId = prof.id;
+          fullName = fullName || prof.full_name;
+          firmId = firmId || prof.firm_id;
+        }
+      } catch (profErr) {
+        console.warn("[verifyOtpAndSetPassword] profile check warn:", profErr);
+      }
+    }
 
     let isValid = false;
     let firmId = matchedInvite?.firm_id;
@@ -355,6 +381,7 @@ export const verifyOtpAndSetPassword = createServerFn({ method: "POST" })
         });
         if (!vErr && vData?.user) {
           isValid = true;
+          userId = userId || vData.user.id;
         }
       } catch {
         // ignore
@@ -362,18 +389,16 @@ export const verifyOtpAndSetPassword = createServerFn({ method: "POST" })
     }
 
     if (!isValid) {
-      throw new Error("Invalid or expired OTP code for this email address. Please check that you entered the correct 6-digit code.");
+      throw new Error("Invalid or expired OTP code for this email address. Please generate a new OTP or check that you entered the exact 6 digits.");
     }
 
     // Update password or create user
-    let userId: string;
-    if (existingUser) {
-      userId = existingUser.id;
+    if (userId) {
       const { error: upErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
         password: data.password,
         email_confirm: true,
         user_metadata: {
-          ...existingUser.user_metadata,
+          ...(existingUser?.user_metadata || {}),
           otp_code: null, // clear OTP after successful use
         },
       });
