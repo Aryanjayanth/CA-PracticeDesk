@@ -39,10 +39,13 @@ export function InviteDialog({
   const [role, setRole] = useState<Role>("staff");
   const [busy, setBusy] = useState(false);
   const [createdLink, setCreatedLink] = useState<string | null>(null);
+  const [createdOtp, setCreatedOtp] = useState<string | null>(null);
   const [invitedEmail, setInvitedEmail] = useState("");
   const [invitedRole, setInvitedRole] = useState<Role>("staff");
   const [emailSent, setEmailSent] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedOtp, setCopiedOtp] = useState(false);
+  const [copiedMsg, setCopiedMsg] = useState(false);
 
   // Sync selected firm when prop changes
   useEffect(() => {
@@ -70,18 +73,38 @@ export function InviteDialog({
     setName("");
     setRole("staff");
     setCreatedLink(null);
+    setCreatedOtp(null);
     setInvitedEmail("");
     setEmailSent(false);
-    setCopied(false);
+    setCopiedLink(false);
+    setCopiedOtp(false);
+    setCopiedMsg(false);
     onClose();
   };
 
   const copyLink = () => {
     if (!createdLink) return;
     navigator.clipboard.writeText(createdLink);
-    setCopied(true);
+    setCopiedLink(true);
     toast.success("Direct activation link copied to clipboard!");
-    setTimeout(() => setCopied(false), 2500);
+    setTimeout(() => setCopiedLink(false), 2500);
+  };
+
+  const copyOtp = () => {
+    if (!createdOtp) return;
+    navigator.clipboard.writeText(createdOtp);
+    setCopiedOtp(true);
+    toast.success("OTP code copied to clipboard!");
+    setTimeout(() => setCopiedOtp(false), 2500);
+  };
+
+  const copyFullMessage = () => {
+    const inviteUrl = createdLink || `${window.location.origin}/set-password`;
+    const message = `Hello! You have been invited to CA PracticeDesk for ${targetFirmName}.\n\nYour 6-digit OTP code is: ${createdOtp || "N/A"}\n\nActivate your account and set your password here:\n${inviteUrl}`;
+    navigator.clipboard.writeText(message);
+    setCopiedMsg(true);
+    toast.success("Complete invitation message copied (ready for WhatsApp / SMS)!");
+    setTimeout(() => setCopiedMsg(false), 2500);
   };
 
   const targetFirmId = firm?.id || selectedFirmId;
@@ -112,12 +135,13 @@ export function InviteDialog({
       });
       qc.invalidateQueries();
 
-      if (r.inviteLink) {
+      if (r.inviteLink || r.otpCode) {
         setCreatedLink(r.inviteLink);
+        setCreatedOtp(r.otpCode || null);
         setInvitedEmail(email.trim().toLowerCase());
         setInvitedRole(role);
         setEmailSent(!!r.emailSent);
-        toast.success("Direct access link generated successfully!");
+        toast.success("Invite and OTP generated successfully!");
       } else {
         toast.success(
           r.status === "invited"
@@ -136,67 +160,108 @@ export function InviteDialog({
   return (
     <Dialog open={isOpen} onOpenChange={(o) => !o && resetAll()}>
       <DialogContent className="max-w-md">
-        {createdLink ? (
+        {createdLink || createdOtp ? (
           <>
             <DialogHeader>
               <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600">
                 <Sparkles className="h-6 w-6" />
               </div>
-              <DialogTitle className="text-center">Link Ready for {invitedEmail}</DialogTitle>
+              <DialogTitle className="text-center">Credentials Ready for {invitedEmail}</DialogTitle>
               <DialogDescription className="text-center">
-                Assigned as <span className="font-semibold text-foreground">{label(invitedRole)}</span> at{" "}
+                Role: <span className="font-semibold text-foreground">{label(invitedRole)}</span> at{" "}
                 <span className="font-semibold text-foreground">{targetFirmName}</span>.
               </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-3 pt-2">
-              <div className="rounded-lg border border-border/60 bg-muted/40 p-3 space-y-2">
-                <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
-                  <span className="flex items-center gap-1.5">
-                    <Link2 className="h-3.5 w-3.5 text-primary" /> Direct Login / Setup Link:
-                  </span>
-                  {emailSent && (
-                    <span className="text-emerald-600 dark:text-emerald-400">✓ Email Dispatched</span>
-                  )}
+              {/* 6-Digit OTP Box */}
+              {createdOtp && (
+                <div className="rounded-xl border border-primary/30 bg-primary/5 p-3.5 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
+                    <span className="font-semibold text-foreground">6-Digit Security OTP</span>
+                    <span className="text-[11px] text-muted-foreground">Valid for 7 days</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="font-mono text-2xl font-bold tracking-[0.25em] text-primary">
+                      {createdOtp}
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      onClick={copyOtp}
+                      className="shrink-0 gap-1.5 h-8 font-medium"
+                    >
+                      {copiedOtp ? (
+                        <Check className="h-4 w-4 text-emerald-500" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
+                      {copiedOtp ? "Copied" : "Copy OTP"}
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Input
-                    value={createdLink}
-                    readOnly
-                    onFocus={(e) => e.target.select()}
-                    className="font-mono text-xs select-all bg-background border-border/80"
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={copyLink}
-                    className="shrink-0 gap-1.5"
-                  >
-                    {copied ? (
-                      <Check className="h-4 w-4 text-emerald-500" />
-                    ) : (
-                      <Copy className="h-4 w-4" />
+              )}
+
+              {/* Direct Activation Link Box */}
+              {createdLink && (
+                <div className="rounded-lg border border-border/60 bg-muted/40 p-3 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
+                    <span className="flex items-center gap-1.5">
+                      <Link2 className="h-3.5 w-3.5 text-primary" /> Direct Link:
+                    </span>
+                    {emailSent && (
+                      <span className="text-emerald-600 dark:text-emerald-400">✓ Email Sent</span>
                     )}
-                    {copied ? "Copied" : "Copy"}
-                  </Button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={createdLink}
+                      readOnly
+                      onFocus={(e) => e.target.select()}
+                      className="font-mono text-xs select-all bg-background border-border/80 h-8"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={copyLink}
+                      className="shrink-0 gap-1.5 h-8"
+                    >
+                      {copiedLink ? (
+                        <Check className="h-4 w-4 text-emerald-500" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
+                      {copiedLink ? "Copied" : "Copy"}
+                    </Button>
+                  </div>
                 </div>
-              </div>
+              )}
 
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Copy and share this link via WhatsApp, email, or chat. Opening it will instantly authenticate the user and let them set their password.
-              </p>
-
-              <div className="pt-1">
+              {/* Copy Full Message Option */}
+              <div className="pt-1 flex gap-2">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="w-full gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-                  onClick={() => window.open(createdLink, "_blank", "noopener,noreferrer")}
+                  className="w-full gap-1.5 text-xs"
+                  onClick={copyFullMessage}
                 >
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  Open Link in New Tab / Test
+                  {copiedMsg ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                  {copiedMsg ? "Message Copied!" : "Copy WhatsApp Message"}
                 </Button>
+                {createdLink && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="shrink-0 gap-1 text-xs text-muted-foreground hover:text-foreground border border-border/40"
+                    onClick={() => window.open(createdLink, "_blank", "noopener,noreferrer")}
+                    title="Test Open"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </Button>
+                )}
               </div>
             </div>
 

@@ -237,6 +237,16 @@ function AuthPage() {
                   )}
                 </Button>
               </form>
+
+              <div className="mt-5 border-t border-slate-800/80 pt-4 text-center text-xs text-slate-400">
+                Received an invite OTP or link?{" "}
+                <a
+                  href="/set-password"
+                  className="font-medium text-blue-400 transition-colors hover:text-blue-300 hover:underline"
+                >
+                  Activate account
+                </a>
+              </div>
             </div>
           </div>
         </div>

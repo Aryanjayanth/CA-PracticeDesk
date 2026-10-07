@@ -96,6 +96,9 @@ async function generateActionLink(
 async function doInvite(input: z.infer<typeof inviteSchema>) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   
+  // Generate a random 6-digit OTP code
+  const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+
   // Record the invite in firm_invites
   await supabaseAdmin.from("firm_invites").upsert(
     {
@@ -104,6 +107,8 @@ async function doInvite(input: z.infer<typeof inviteSchema>) {
       role: input.role,
       full_name: input.fullName || null,
       accepted: false,
+      otp_code: otpCode,
+      otp_expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
     },
     { onConflict: "firm_id,email" }
   );
@@ -147,13 +152,13 @@ async function doInvite(input: z.infer<typeof inviteSchema>) {
       .upsert({ user_id: prof.id, role: input.role }, { onConflict: "user_id,role" });
     await supabaseAdmin
       .from("firm_invites")
-      .update({ accepted: true })
+      .update({ accepted: true, otp_code: otpCode })
       .ilike("email", input.email)
       .eq("firm_id", input.firmId);
-    return { status: "linked" as const, inviteLink, emailSent };
+    return { status: "linked" as const, inviteLink, otpCode, emailSent };
   }
 
-  return { status: "invited" as const, inviteLink, emailSent };
+  return { status: "invited" as const, inviteLink, otpCode, emailSent };
 }
 
 export const inviteUser = createServerFn({ method: "POST" })
@@ -195,6 +200,22 @@ export const generateLoginLink = createServerFn({ method: "POST" })
       if (!mgr || (data.firmId && firm !== data.firmId)) throw new Error("Not authorised");
     }
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+    if (data.firmId) {
+      await supabaseAdmin.from("firm_invites").upsert(
+        {
+          firm_id: data.firmId,
+          email: data.email,
+          role: data.role || "staff",
+          accepted: false,
+          otp_code: otpCode,
+          otp_expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        },
+        { onConflict: "firm_id,email" }
+      );
+    }
+
     const link = await generateActionLink(
       supabaseAdmin,
       data.email,
@@ -202,7 +223,100 @@ export const generateLoginLink = createServerFn({ method: "POST" })
       data.redirectTo || `${process.env.APP_URL || "http://localhost:5173"}/set-password`
     );
     if (!link) throw new Error("Could not generate direct link for this email");
-    return { link, email: data.email };
+    return { link, otpCode, email: data.email };
+  });
+
+export const verifyOtpAndSetPassword = createServerFn({ method: "POST" })
+  .inputValidator((d) =>
+    z
+      .object({
+        email: z.string().trim().toLowerCase().email("Please enter a valid email"),
+        otp: z.string().trim().min(4, "Invalid OTP code"),
+        password: z.string().min(8, "Password must be at least 8 characters"),
+      })
+      .parse(d)
+  )
+  .handler(async ({ data }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    // Look up invite with matching email and OTP code
+    const { data: inv } = await supabaseAdmin
+      .from("firm_invites")
+      .select("*")
+      .ilike("email", data.email)
+      .eq("otp_code", data.otp)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    let isValid = !!inv;
+
+    if (!isValid) {
+      // Try verifying with Supabase native OTP verification if applicable
+      try {
+        const { data: vData, error: vErr } = await supabaseAdmin.auth.verifyOtp({
+          email: data.email,
+          token: data.otp,
+          type: "email",
+        });
+        if (!vErr && vData?.user) {
+          isValid = true;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (!isValid) {
+      throw new Error("Invalid or expired OTP code for this email address. Please check with your administrator.");
+    }
+
+    // Find or create auth user
+    const { data: usersData } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+    const existingUser = usersData?.users?.find(
+      (u) => u.email?.toLowerCase() === data.email.toLowerCase()
+    );
+
+    let userId: string;
+    if (existingUser) {
+      userId = existingUser.id;
+      const { error: upErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+        password: data.password,
+        email_confirm: true,
+      });
+      if (upErr) throw new Error(upErr.message);
+    } else {
+      const { data: newUser, error: cErr } = await supabaseAdmin.auth.admin.createUser({
+        email: data.email,
+        password: data.password,
+        email_confirm: true,
+        user_metadata: inv?.full_name ? { full_name: inv.full_name } : undefined,
+      });
+      if (cErr || !newUser.user) throw new Error(cErr?.message || "Could not create user account");
+      userId = newUser.user.id;
+    }
+
+    // Link profile & role if invite exists
+    if (inv) {
+      await supabaseAdmin
+        .from("profiles")
+        .update({
+          firm_id: inv.firm_id,
+          full_name: inv.full_name || undefined,
+        })
+        .eq("id", userId);
+
+      await supabaseAdmin
+        .from("user_roles")
+        .upsert({ user_id: userId, role: inv.role }, { onConflict: "user_id,role" });
+
+      await supabaseAdmin
+        .from("firm_invites")
+        .update({ accepted: true })
+        .eq("id", inv.id);
+    }
+
+    return { success: true, email: data.email };
   });
 
 export const createFirm = createServerFn({ method: "POST" })
