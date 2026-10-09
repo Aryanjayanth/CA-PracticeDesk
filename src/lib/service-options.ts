@@ -17,20 +17,26 @@
 
 export const SERVICE_TYPES = [
   "GST",
-  "TDS / TCS",
   "Income Tax",
   "Statutory Audit",
-  "Tax Audit",
   "Internal Audit",
   "Accounting & Bookkeeping",
   "Payroll & PF / ESI",
   "ROC & MCA Compliance",
   "Company / LLP Incorporation",
-  "GST Registration & Amendments",
   "Management Consultancy",
   "Appeals & Litigation",
   "Other",
 ] as const;
+
+/** Canonical mapping helper to ensure GST registration groups under GST, and TDS/TCS & Tax Audits under Income Tax */
+export const normalizeServiceType = (type: string | null | undefined, name?: string): string => {
+  const t = (type ?? "").trim();
+  const n = (name ?? "").trim().toLowerCase();
+  if (t === "GST Registration & Amendments" || t === "GST Registration" || n.includes("gst registration")) return "GST";
+  if (t === "TDS / TCS" || t === "TDS/TCS" || t === "TDS" || t === "Tax Audit" || n.includes("tds") || n.includes("tcs") || n.includes("tax audit")) return "Income Tax";
+  return t || "Other";
+};
 
 /** Frequencies offered when a service is recurring. `one_time` is not offered. */
 export const RECURRING_FREQS = [

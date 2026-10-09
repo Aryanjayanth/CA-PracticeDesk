@@ -20,9 +20,7 @@ export async function fetchRows(table: TableName): Promise<Record<string, unknow
 }
 
 type LooseTable = {
-  select: (cols: string) => {
-    toPromise: () => PromiseLike<{ data: Record<string, unknown>[] | null; error: DbError }>;
-  };
+  select: (cols: string) => PromiseLike<{ data: Record<string, unknown>[] | null; error: DbError }>;
   insert: (payload: Record<string, unknown>) => PromiseLike<{ error: DbError }>;
   update: (payload: Record<string, unknown>) => {
     eq: (column: string, value: string) => PromiseLike<{ error: DbError }>;
@@ -52,7 +50,7 @@ export async function fetchSimple(
   table: TableName,
   cols: string,
 ): Promise<Record<string, unknown>[]> {
-  const { data, error } = await loose(table).select(cols).toPromise();
+  const { data, error } = await loose(table).select(cols);
   if (error) throw new Error(error.message);
   return data ?? [];
 }

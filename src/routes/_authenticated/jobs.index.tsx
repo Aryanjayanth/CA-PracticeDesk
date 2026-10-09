@@ -43,28 +43,26 @@ function JobsPage() {
 
   const handleQuickComplete = async (e: React.MouseEvent, j: { id: string; job_code: string; status: string }) => {
     e.stopPropagation();
-    if (j.status === "completed") {
-      navigate({ to: "/clearing/$jobId", params: { jobId: j.id }, search: {} });
-      return;
-    }
     if (!canEdit("jobs")) {
       toast.error("You are not authorised to update job status");
       return;
     }
+    const newStatus = j.status === "completed" ? "in_progress" : "completed";
     try {
       const { error } = await supabase.rpc("update_job_status", {
         _job_id: j.id,
-        _status: "completed",
-        _reason: "Completed via Jobs list quick checkbox",
+        _status: newStatus,
+        _reason: `Status changed to ${newStatus} via Jobs list quick checkbox`,
       });
       if (error) throw error;
       qc.invalidateQueries({ queryKey: ["jobs"] });
       qc.invalidateQueries({ queryKey: ["job", j.id] });
       qc.invalidateQueries({ queryKey: ["job-workflow", j.id] });
-      toast.success(`Job ${j.job_code} marked Completed!`, {
-        description: "Redirecting to Payment Clearing...",
-      });
-      navigate({ to: "/clearing/$jobId", params: { jobId: j.id }, search: {} });
+      toast.success(
+        newStatus === "completed"
+          ? `Job ${j.job_code} marked as Completed!`
+          : `Job ${j.job_code} status set to In Progress`,
+      );
     } catch (err) {
       toast.error(errMsg(err));
     }
@@ -218,8 +216,8 @@ function JobsPage() {
                   )}
                   title={
                     isDone
-                      ? "Job Completed — Click to open Payment Clearing"
-                      : "Click to complete Job & proceed to Payment Clearing"
+                      ? "Job Completed — Click to reopen as In Progress"
+                      : "Click to mark Job as Completed"
                   }
                 >
                   {isDone ? <CheckCircle2 className="h-4 w-4" /> : <Check className="h-3.5 w-3.5 opacity-60 hover:opacity-100" />}

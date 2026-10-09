@@ -348,7 +348,7 @@ function ClientProfile() {
                   <div className="truncate font-medium">{c.email || "—"}</div>
                 </div>
                 <div>
-                  <div className="text-xs text-muted-foreground">Name of Concerned Person</div>
+                  <div className="text-xs text-muted-foreground">Primary Concerned Person</div>
                   <div className="font-medium">{c.contact_person_name || "—"}</div>
                 </div>
                 <div>
@@ -491,6 +491,16 @@ function ClientProfile() {
                 ),
               },
               { key: "title", header: "Title" },
+              {
+                key: "created",
+                header: "Created Date",
+                sort: (j) => j.created_at ?? "",
+                render: (j) => (
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">
+                    {fmtDate(j.created_at)}
+                  </span>
+                ),
+              },
               {
                 key: "due",
                 header: "Due",
@@ -790,8 +800,16 @@ function LinkServiceDialog({
       auto_invoice: f.auto_invoice,
     });
     if (error) return toast.error(errMsg(error));
-    toast.success("Service linked");
+
+    try {
+      await supabase.rpc("generate_recurring_jobs", { _upto: today() });
+    } catch {
+      // non-fatal
+    }
+    toast.success("Service linked and recurring job populated");
     qc.invalidateQueries({ queryKey: ["client360"] });
+    qc.invalidateQueries({ queryKey: ["jobs"] });
+    qc.invalidateQueries({ queryKey: ["client-services"] });
     onOpenChange(false);
   };
   return (

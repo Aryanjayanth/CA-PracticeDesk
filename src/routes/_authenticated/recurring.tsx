@@ -574,8 +574,14 @@ function NewRecurringDialog({
       });
 
       if (error) throw error;
-      toast.success("Recurring schedule created successfully");
+      try {
+        await supabase.rpc("generate_recurring_jobs", { _upto: today() });
+      } catch {
+        // non-fatal
+      }
+      toast.success("Recurring schedule created & jobs populated");
       qc.invalidateQueries({ queryKey: ["client-services"] });
+      qc.invalidateQueries({ queryKey: ["jobs"] });
       onOpenChange(false);
     } catch (err) {
       toast.error(errMsg(err));

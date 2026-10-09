@@ -258,6 +258,22 @@ export function ClientForm({
           <Field
             label={
               <>
+                Primary Concerned Person{" "}
+                <span className="font-normal text-muted-foreground">(optional)</span>
+              </>
+            }
+          >
+            <Input
+              value={f.contact_person_name}
+              onChange={set("contact_person_name")}
+              placeholder="Enter name of primary contact/person"
+            />
+          </Field>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Field
+            label={
+              <>
                 Phone Number <Req />
               </>
             }
@@ -269,21 +285,22 @@ export function ClientForm({
               placeholder="Enter phone number"
             />
           </Field>
+          <Field
+            label={
+              <>
+                Client Type <Req />
+              </>
+            }
+            className="sm:col-span-2"
+          >
+            <ChipSelect
+              ariaLabel="Client Type"
+              value={f.client_type}
+              onChange={(v) => pick("client_type", v || "Company")}
+              options={opts(CLIENT_TYPES)}
+            />
+          </Field>
         </div>
-        <Field
-          label={
-            <>
-              Client Type <Req />
-            </>
-          }
-        >
-          <ChipSelect
-            ariaLabel="Client Type"
-            value={f.client_type}
-            onChange={(v) => pick("client_type", v || "Company")}
-            options={opts(CLIENT_TYPES)}
-          />
-        </Field>
         <Field
           label={
             <>
@@ -303,8 +320,8 @@ export function ClientForm({
 
       {/* 2 — Contacts */}
       <Section
-        title="Contacts"
-        hint="Who you speak to at this client. The concerned person is optional."
+        title="Contacts & Secondary Details"
+        hint="Additional contact details for the concerned person and secondary numbers."
       >
         <div className="grid gap-4 sm:grid-cols-3">
           <Field
@@ -321,18 +338,19 @@ export function ClientForm({
               placeholder="Enter secondary phone"
             />
           </Field>
-          <Field label="Name of Concerned Person" hint="Optional">
-            <Input
-              value={f.contact_person_name}
-              onChange={set("contact_person_name")}
-              placeholder="Enter name"
-            />
-          </Field>
           <Field label="Concerned Person's Phone" hint="Optional">
             <Input
               value={f.contact_person_phone}
               onChange={set("contact_person_phone")}
               placeholder="Enter phone number"
+            />
+          </Field>
+          <Field label="Email" hint="Optional">
+            <Input
+              type="email"
+              value={f.email}
+              onChange={set("email")}
+              placeholder="Enter email address"
             />
           </Field>
         </div>
@@ -347,14 +365,6 @@ export function ClientForm({
             value={f.contact_person_role}
             onChange={(v) => pick("contact_person_role", v)}
             options={opts(CONCERN_ROLES)}
-          />
-        </Field>
-        <Field label="Email" hint="Optional">
-          <Input
-            type="email"
-            value={f.email}
-            onChange={set("email")}
-            placeholder="Enter email address"
           />
         </Field>
       </Section>

@@ -1046,7 +1046,7 @@ function ClearingPage() {
                           </div>
 
                           {/* Quick Financial Inputs Grid */}
-                          <div className="grid grid-cols-2 sm:grid-cols-7 gap-2 bg-muted/30 p-3 rounded-lg border border-border/50 text-xs">
+                          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 bg-muted/30 p-3 rounded-lg border border-border/50 text-xs">
                             <div>
                               <span className="text-muted-foreground block text-[10px] uppercase font-medium">
                                 Job Fee (Gross)
@@ -1062,7 +1062,7 @@ function ClearingPage() {
                                 type="number"
                                 min={0}
                                 disabled={isInvoiced}
-                                className="h-7 text-xs font-mono mt-0.5"
+                                className="h-7 text-xs font-mono mt-0.5 bg-background"
                                 value={d.discount}
                                 onChange={(e) =>
                                   setDrafts((prev) => ({
@@ -1082,12 +1082,32 @@ function ClearingPage() {
                                 type="number"
                                 min={0}
                                 disabled={isInvoiced}
-                                className="h-7 text-xs font-mono mt-0.5"
+                                className="h-7 text-xs font-mono mt-0.5 bg-background"
                                 value={d.tds_tcs}
                                 onChange={(e) =>
                                   setDrafts((prev) => ({
                                     ...prev,
                                     [j.id]: { ...d, tds_tcs: e.target.value },
+                                  }))
+                                }
+                                placeholder="0"
+                              />
+                            </div>
+
+                            <div>
+                              <span className="text-muted-foreground block text-[10px] uppercase font-medium">
+                                Other Ded (–)
+                              </span>
+                              <Input
+                                type="number"
+                                min={0}
+                                disabled={isInvoiced}
+                                className="h-7 text-xs font-mono mt-0.5 bg-background"
+                                value={d.other_deduction}
+                                onChange={(e) =>
+                                  setDrafts((prev) => ({
+                                    ...prev,
+                                    [j.id]: { ...d, other_deduction: e.target.value },
                                   }))
                                 }
                                 placeholder="0"
@@ -1102,7 +1122,7 @@ function ClearingPage() {
                                 type="number"
                                 min={0}
                                 disabled={isInvoiced}
-                                className="h-7 text-xs font-mono mt-0.5"
+                                className="h-7 text-xs font-mono mt-0.5 bg-background"
                                 value={d.other_addition}
                                 onChange={(e) =>
                                   setDrafts((prev) => ({
@@ -1120,7 +1140,7 @@ function ClearingPage() {
                               </span>
                               <NativeSelect
                                 disabled={isInvoiced}
-                                className="h-7 text-xs mt-0.5"
+                                className="h-7 text-xs mt-0.5 bg-background"
                                 value={d.tax_rate || "0"}
                                 onChange={(e) => {
                                   const newRate = e.target.value;
@@ -1190,7 +1210,7 @@ function ClearingPage() {
                                 type="number"
                                 min={0}
                                 disabled={isInvoiced}
-                                className="h-7 text-xs font-mono mt-0.5 text-emerald-600 font-bold"
+                                className="h-7 text-xs font-mono mt-0.5 text-emerald-600 font-bold bg-background"
                                 value={d.advance}
                                 onChange={(e) =>
                                   setDrafts((prev) => ({

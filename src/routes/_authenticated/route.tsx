@@ -38,16 +38,16 @@ function Layout() {
   // a Cashier's browser never attempts it.
   const mayGenerate = canEdit("recurring");
 
-  // Auto-generate due recurring jobs once per firm per day
+  // Auto-generate due recurring jobs once per firm per session
   useEffect(() => {
     const fid = firm.data?.id;
     if (!fid || !mayGenerate) return;
     const key = `recurring-run-${fid}-${today()}`;
-    if (localStorage.getItem(key)) return;
-    localStorage.setItem(key, "1");
-    supabase.rpc("generate_recurring_jobs", { _upto: today() }).then(({ data }) => {
-      if (data) {
-        toast.success(`${data} recurring job(s) created automatically`);
+    if (sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, "1");
+    supabase.rpc("generate_recurring_jobs", { _upto: today() }).then(({ data, error }) => {
+      if (!error && data && data > 0) {
+        toast.success(`${data} recurring job(s) populated automatically`);
         qc.invalidateQueries();
       }
     });

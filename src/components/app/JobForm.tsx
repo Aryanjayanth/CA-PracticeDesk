@@ -28,7 +28,8 @@ import {
 } from "@/components/ui/command";
 import { ClientSelect, Field, FormScreen } from "./common";
 import { useClientLookup } from "@/hooks/use-roles";
-import { errMsg, inr } from "@/lib/format";
+import { errMsg, inr, today } from "@/lib/format";
+import { normalizeServiceType } from "@/lib/service-options";
 import { cn } from "@/lib/utils";
 
 export interface JobServiceRow {
@@ -49,6 +50,7 @@ export function JobForm({ open, onOpenChange, initialClientId }: JobFormProps) {
   const { data: clients } = useClientLookup();
 
   const [clientId, setClientId] = useState(initialClientId ?? "");
+  const [taskDate, setTaskDate] = useState(today());
   const [items, setItems] = useState<JobServiceRow[]>([]);
   const [servicesPopoverOpen, setServicesPopoverOpen] = useState(false);
   const [advance, setAdvance] = useState("");
@@ -106,11 +108,11 @@ export function JobForm({ open, onOpenChange, initialClientId }: JobFormProps) {
   const availableServices = servicesQuery.data ?? [];
   const clientServices = clientServicesQuery.data ?? [];
 
-  // Group services by type for quick organized selection
+  // Group services by type for quick organized selection (GST Registration -> GST, TDS/Tax Audit -> Income Tax)
   const serviceGroups = useMemo(() => {
     const map = new Map<string, typeof availableServices>();
     for (const s of availableServices) {
-      const type = s.service_type || "General";
+      const type = normalizeServiceType(s.service_type, s.name);
       if (!map.has(type)) map.set(type, []);
       map.get(type)!.push(s);
     }
@@ -241,8 +243,9 @@ export function JobForm({ open, onOpenChange, initialClientId }: JobFormProps) {
         notes: generalNotes.trim() || null,
         auto_invoice: autoInvoice,
         due_date: null,
-        period_start: null,
-        period_end: null,
+        period_start: taskDate || null,
+        period_end: taskDate || null,
+        created_at: taskDate ? new Date(`${taskDate}T12:00:00Z`).toISOString() : new Date().toISOString(),
         status: "pending",
         financial_status: "open",
       };
@@ -319,44 +322,55 @@ export function JobForm({ open, onOpenChange, initialClientId }: JobFormProps) {
       }
     >
       <div className="space-y-6">
-        {/* Top: Client Selection Card */}
+        {/* Top: Client Selection & Task Date Card */}
         <section className="rounded-xl border bg-card p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Client
-            </h3>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="sm:col-span-2 space-y-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground block">
+                Client *
+              </label>
+              <ClientSelect
+                value={clientId}
+                onChange={(id) => setClientId(id)}
+                placeholder="Search and select client by name or client code…"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground block">
+                Date of Creation of Task *
+              </label>
+              <Input
+                type="date"
+                value={taskDate}
+                onChange={(e) => setTaskDate(e.target.value)}
+                className="h-9 text-xs font-mono bg-background"
+              />
+            </div>
           </div>
-          <div className="grid gap-3">
-            <ClientSelect
-              value={clientId}
-              onChange={(id) => setClientId(id)}
-              placeholder="Search and select client by name or client code…"
-            />
 
-            {selectedClient && (
-              <div className="rounded-lg border bg-muted/30 px-3.5 py-2.5 text-xs text-muted-foreground flex flex-wrap items-center gap-x-6 gap-y-1.5">
-                <div className="flex items-center gap-1.5 font-medium text-foreground">
-                  <Building className="h-3.5 w-3.5 text-primary" />
-                  <span>{selectedClient.name}</span>
-                  {selectedClient.client_code && (
-                    <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-                      {selectedClient.client_code}
-                    </span>
-                  )}
-                </div>
-                {selectedClient.client_type && (
-                  <div>
-                    Type: <span className="font-medium text-foreground">{selectedClient.client_type}</span>
-                  </div>
-                )}
-                {selectedClient.mobile && (
-                  <div>
-                    Mobile: <span className="font-mono text-foreground">{selectedClient.mobile}</span>
-                  </div>
+          {selectedClient && (
+            <div className="rounded-lg border bg-muted/30 px-3.5 py-2.5 text-xs text-muted-foreground flex flex-wrap items-center gap-x-6 gap-y-1.5">
+              <div className="flex items-center gap-1.5 font-medium text-foreground">
+                <Building className="h-3.5 w-3.5 text-primary" />
+                <span>{selectedClient.name}</span>
+                {selectedClient.client_code && (
+                  <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
+                    {selectedClient.client_code}
+                  </span>
                 )}
               </div>
-            )}
-          </div>
+              {selectedClient.client_type && (
+                <div>
+                  Type: <span className="font-medium text-foreground">{selectedClient.client_type}</span>
+                </div>
+              )}
+              {selectedClient.mobile && (
+                <div>
+                  Mobile: <span className="font-mono text-foreground">{selectedClient.mobile}</span>
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         {/* Unified Service & Pricing Box */}
