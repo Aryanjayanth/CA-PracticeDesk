@@ -26,6 +26,7 @@ import { NoAccess, PageHeader, ReasonDialog, Field, NativeSelect } from "@/compo
 import { StatusBadge } from "@/components/app/StatusBadge";
 import { useRoles } from "@/hooks/use-roles";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useCurrentFirm, useUserFirms } from "@/hooks/use-firm";
 import { KIND_IS_COST, KIND_LABEL } from "@/lib/expenses";
 import { cn } from "@/lib/utils";
 import { errMsg, fmtDate, inr, invoiceDisplayStatus, MODES, today } from "@/lib/format";
@@ -132,14 +133,55 @@ const num = (v: string | number | undefined) =>
 const str = (v: unknown) => (v === null || v === undefined ? "" : String(v));
 const avail = (p: Pay) => Math.max(0, Number(p.amount) - Number(p.allocated_amount));
 
+const getJobFinancials = (j: CompletedJob, d?: JobDraft) => {
+  const draft = d || {
+    advance: "0",
+    discount: "0",
+    tds_tcs: "0",
+    other_deduction: "0",
+    other_addition: "0",
+    tax_rate: "0",
+    notes: "",
+  };
+  const gross = Number(j.fee || j.net_amount || 0);
+  const disc = num(draft.discount);
+  const tds = num(draft.tds_tcs);
+  const oDed = num(draft.other_deduction);
+  const oAdd = num(draft.other_addition);
+  const rate = num(draft.tax_rate);
+  const netFinal = Math.max(0, gross - disc - tds - oDed + oAdd);
+  const taxAmt = Math.round(((netFinal * rate) / 100) * 100) / 100;
+  const totalWithTax = netFinal + taxAmt;
+  const adv = num(draft.advance);
+  const balDue = Math.max(0, totalWithTax - adv);
+  const isFullyCovered = balDue === 0;
+  return {
+    gross,
+    disc,
+    tds,
+    oDed,
+    oAdd,
+    rate,
+    netFinal,
+    taxAmt,
+    totalWithTax,
+    adv,
+    balDue,
+    isFullyCovered,
+  };
+};
+
 function ClearingPage() {
   const { isFinance, loading } = useRoles();
   const { canView } = usePermissions();
+  const { data: currentFirm } = useCurrentFirm();
+  const { data: userFirms } = useUserFirms();
   const search = Route.useSearch();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const canViewExpenses = canView("expenses");
 
+  const [selectedFirmId, setSelectedFirmId] = useState(currentFirm?.id ?? "");
   const [cid, setCid] = useState<string | undefined>(search.client);
   const [drafts, setDrafts] = useState<Record<string, JobDraft>>({});
   const [expandedJobs, setExpandedJobs] = useState<Record<string, boolean>>({});
@@ -149,6 +191,12 @@ function ClearingPage() {
   const [invTaxRate, setInvTaxRate] = useState("18");
   const [invDueDate, setInvDueDate] = useState(today());
   const [invNotes, setInvNotes] = useState("");
+
+  useEffect(() => {
+    if (currentFirm?.id && !selectedFirmId) {
+      setSelectedFirmId(currentFirm.id);
+    }
+  }, [currentFirm?.id, selectedFirmId]);
 
   // 1. Fetch Completed Jobs
   const jobsQ = useQuery({
@@ -327,6 +375,36 @@ function ClearingPage() {
 
   const clientRemainingAdvance = totalClientReceived - totalAllocated;
 
+  const coveredJobsCount = useMemo(() => {
+    return pendingClientJobs.filter((j) => {
+      const fin = getJobFinancials(j, drafts[j.id]);
+      return fin.isFullyCovered;
+    }).length;
+  }, [pendingClientJobs, drafts]);
+
+  const handleQuickDiscountToSettle = (jobId: string, shortfall: number) => {
+    setDrafts((prev) => {
+      const d = prev[jobId] || {
+        advance: "0",
+        discount: "0",
+        tds_tcs: "0",
+        other_deduction: "0",
+        other_addition: "0",
+        tax_rate: "0",
+        notes: "",
+      };
+      const curDisc = num(d.discount);
+      return {
+        ...prev,
+        [jobId]: {
+          ...d,
+          discount: String(curDisc + shortfall),
+        },
+      };
+    });
+    toast.success(`Applied ₹${shortfall} discount so job is settled in full!`);
+  };
+
   // Seed drafts for current client's jobs with smart auto-allocation from money jar
   useEffect(() => {
     if (!clientJobs.length) return;
@@ -374,8 +452,7 @@ function ClearingPage() {
     let moneyPool = totalClientReceived;
     const nextDrafts = { ...drafts };
 
-    for (const j of clientJobs) {
-      if (j.financial_status === "invoiced" || j.financial_status === "closed") continue;
+    for (const j of pendingClientJobs) {
       const d = nextDrafts[j.id] || {
         advance: "0",
         discount: "0",
@@ -453,8 +530,35 @@ function ClearingPage() {
   // Save all job clearing adjustments, square off, and automatically generate invoices
   const handleSaveAndSquareOff = async (jobId?: string, autoInvoice = true) => {
     if (!cid) return;
+
+    let targetJobs: CompletedJob[] = [];
+    if (jobId) {
+      const single = clientJobs.find((j) => j.id === jobId);
+      if (!single) return;
+      const fin = getJobFinancials(single, drafts[single.id]);
+      if (!fin.isFullyCovered) {
+        toast.error(
+          `Cannot square off: ₹${fin.balDue} is unpaid. Advance payment or discount is required to settle in full.`,
+        );
+        return;
+      }
+      targetJobs = [single];
+    } else {
+      // Bulk square off: ONLY process jobs that are 100% covered by advance or discount!
+      targetJobs = pendingClientJobs.filter((j) => {
+        const fin = getJobFinancials(j, drafts[j.id]);
+        return fin.isFullyCovered;
+      });
+
+      if (targetJobs.length === 0) {
+        toast.error(
+          "No pending jobs are fully covered by advance or discount. Uncovered jobs cannot be squared off as unpaid.",
+        );
+        return;
+      }
+    }
+
     setBusy(true);
-    const targetJobs = jobId ? clientJobs.filter((j) => j.id === jobId) : clientJobs;
     let invoicedCount = 0;
 
     try {
@@ -568,8 +672,8 @@ function ClearingPage() {
 
       toast.success(
         invoicedCount > 0
-          ? `Squared off & Invoiced ${invoicedCount} job(s) successfully!`
-          : "Jobs squared off successfully!",
+          ? `Squared off & settled ${invoicedCount} covered job(s) in full!`
+          : "Covered jobs squared off successfully!",
       );
     } catch (e) {
       toast.error(errMsg(e));
@@ -596,6 +700,9 @@ function ClearingPage() {
       });
 
       if (error) throw error;
+      if (invId && selectedFirmId) {
+        await supabase.from("invoices").update({ firm_id: selectedFirmId }).eq("id", invId);
+      }
 
       // Invalidate queries
       await Promise.all([
@@ -621,28 +728,7 @@ function ClearingPage() {
     <div className="space-y-4">
       <PageHeader
         title="Payment Clearing"
-        subtitle="Select a client to clear completed jobs against received money, grant discounts & TDS, review firm costs, and square off before invoicing."
-        actions={
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleAutoFill}
-              disabled={busy || !currentClient || totalClientReceived <= 0 || pendingClientJobs.length === 0}
-            >
-              <Sparkles className="mr-1.5 h-4 w-4 text-amber-500" />
-              Auto-Fill Advance
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => handleSaveAndSquareOff(undefined, true)}
-              disabled={busy || !currentClient || pendingClientJobs.length === 0}
-            >
-              <CheckCircle2 className="mr-1.5 h-4 w-4" />
-              Square Off & Invoice All
-            </Button>
-          </div>
-        }
+        subtitle="Select a client to clear completed jobs against received money, grant discounts & TDS, and square off before invoicing."
       />
 
       <div className="grid gap-5 lg:grid-cols-3">
@@ -685,7 +771,7 @@ function ClearingPage() {
                   <div className="mt-2.5 grid grid-cols-2 gap-2 text-xs">
                     <div className="bg-muted/40 p-2 rounded-lg border border-border/40">
                       <div className="text-muted-foreground text-[10px] uppercase font-medium">
-                        Received (Jar)
+                        Advance Balance
                       </div>
                       <div className="font-mono font-bold text-emerald-600 mt-0.5">
                         {inr(g.totalAvailMoney)}
@@ -731,33 +817,43 @@ function ClearingPage() {
                         Code: {currentClient.code} · {clientJobs.length} Completed Job(s)
                       </p>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex items-center gap-2">
+                      {totalClientReceived > 0 && pendingClientJobs.length > 0 && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={handleAutoFill}
+                          disabled={busy}
+                          className="text-xs"
+                        >
+                          <Sparkles className="mr-1.5 h-3.5 w-3.5 text-amber-500" />
+                          Auto-Fill Advance
+                        </Button>
+                      )}
                       <Button
                         size="sm"
-                        variant="outline"
-                        onClick={handleAutoFill}
-                        disabled={totalClientReceived <= 0}
-                        className="text-xs"
+                        onClick={() => handleSaveAndSquareOff(undefined, true)}
+                        disabled={busy || coveredJobsCount === 0}
+                        className={cn(
+                          "text-xs font-medium",
+                          coveredJobsCount > 0
+                            ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
+                            : "",
+                        )}
                       >
-                        <Wand2 className="mr-1.5 h-3.5 w-3.5 text-primary" />
-                        Auto-Fill Oldest First
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={() => handleSaveAndSquareOff()}
-                        disabled={busy || clientJobs.length === 0}
-                        className="text-xs font-medium"
-                      >
-                        Square Off All Jobs
+                        <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
+                        {coveredJobsCount === 0
+                          ? "No Jobs Covered (Awaiting Payment)"
+                          : `Square Off Covered Jobs (${coveredJobsCount}/${pendingClientJobs.length})`}
                       </Button>
                     </div>
                   </div>
 
-                  {/* 4-Jar Metric Display */}
+                  {/* 4 Summary Metric Cards */}
                   <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
                     <div className="rounded-lg bg-emerald-50/50 p-2.5 dark:bg-emerald-950/20 border border-emerald-200/50 dark:border-emerald-800/40">
                       <div className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
-                        Money In (Jar)
+                        Total Advance Received
                       </div>
                       <div className="mt-1 font-mono text-lg font-bold text-emerald-600">
                         {inr(totalClientReceived)}
@@ -768,7 +864,7 @@ function ClearingPage() {
                     </div>
 
                     <div className="rounded-lg bg-primary/5 p-2.5 border border-primary/20">
-                      <div className="text-[11px] font-medium text-primary">Total Work Net Fee</div>
+                      <div className="text-[11px] font-medium text-primary">Completed Work Fee</div>
                       <div className="mt-1 font-mono text-lg font-bold text-foreground">
                         {inr(
                           clientJobs.reduce(
@@ -782,17 +878,17 @@ function ClearingPage() {
 
                     <div className="rounded-lg bg-blue-50/50 p-2.5 dark:bg-blue-950/20 border border-blue-200/50 dark:border-blue-800/40">
                       <div className="text-[11px] font-medium text-blue-700 dark:text-blue-300">
-                        Allocating Now
+                        Allocated to Work
                       </div>
                       <div className="mt-1 font-mono text-lg font-bold text-blue-600">
                         {inr(totalAllocated)}
                       </div>
-                      <div className="text-[10px] text-muted-foreground">From money jar</div>
+                      <div className="text-[10px] text-muted-foreground">From advance receipts</div>
                     </div>
 
                     <div className="rounded-lg bg-amber-50/50 p-2.5 dark:bg-amber-950/20 border border-amber-200/50 dark:border-amber-800/40">
                       <div className="text-[11px] font-medium text-amber-700 dark:text-amber-300">
-                        Left as Advance
+                        Remaining Advance
                       </div>
                       <div
                         className={cn(
@@ -900,17 +996,21 @@ function ClearingPage() {
                       notes: "",
                     };
 
-                    const gross = Number(j.fee || j.net_amount || 0);
-                    const disc = num(d.discount);
-                    const tds = num(d.tds_tcs);
-                    const oDed = num(d.other_deduction);
-                    const oAdd = num(d.other_addition);
-                    const rate = num(d.tax_rate);
-                    const netFinal = Math.max(0, gross - disc - tds - oDed + oAdd);
-                    const taxAmt = Math.round((netFinal * rate) / 100 * 100) / 100;
-                    const totalWithTax = netFinal + taxAmt;
-                    const adv = num(d.advance);
-                    const balDue = Math.max(0, totalWithTax - adv);
+                    const fin = getJobFinancials(j, d);
+                    const {
+                      gross,
+                      disc,
+                      tds,
+                      oDed,
+                      oAdd,
+                      rate,
+                      netFinal,
+                      taxAmt,
+                      totalWithTax,
+                      adv,
+                      balDue,
+                      isFullyCovered,
+                    } = fin;
 
                     const cStatus = j.job_clearing?.[0]?.status;
                     const isInvoiced = j.financial_status === "invoiced" || j.financial_status === "closed";
@@ -945,13 +1045,13 @@ function ClearingPage() {
                                   <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 border border-blue-200">
                                     Squared Off
                                   </span>
-                                ) : cStatus === "cleared" ? (
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 border border-amber-200">
-                                    Cleared
+                                ) : isFullyCovered ? (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200">
+                                    ✓ Fully Covered
                                   </span>
                                 ) : (
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                                    Draft
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200 border border-amber-300">
+                                    Shortfall: {inr(balDue)}
                                   </span>
                                 )}
                               </div>
@@ -1005,25 +1105,35 @@ function ClearingPage() {
                                   <FileText className="mr-1.5 h-3.5 w-3.5" />
                                   Create Invoice
                                 </Button>
+                              ) : isFullyCovered ? (
+                                <Button
+                                  size="sm"
+                                  className="h-8 text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+                                  disabled={busy}
+                                  onClick={() => handleSaveAndSquareOff(j.id, true)}
+                                >
+                                  <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
+                                  Square Off & Settle (Paid)
+                                </Button>
                               ) : (
                                 <div className="flex items-center gap-1.5">
                                   <Button
                                     size="sm"
-                                    variant="default"
-                                    className="h-8 text-xs font-medium"
-                                    disabled={busy}
-                                    onClick={() => handleSaveAndSquareOff(j.id, false)}
+                                    variant="outline"
+                                    className="h-8 text-xs font-medium border-amber-300 text-amber-800 bg-amber-50 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+                                    onClick={() => handleQuickDiscountToSettle(j.id, balDue)}
+                                    title={`Apply ₹${balDue} discount so this job is settled in full`}
                                   >
-                                    Square Off
+                                    + Discount {inr(balDue)} to Settle
                                   </Button>
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    className="h-8 text-xs font-medium text-emerald-700 border-emerald-300 hover:bg-emerald-50 dark:text-emerald-300"
-                                    disabled={busy}
-                                    onClick={() => handleSaveAndSquareOff(j.id, true)}
+                                    disabled
+                                    className="h-8 text-xs font-medium cursor-not-allowed opacity-75 bg-muted text-muted-foreground"
+                                    title="Cannot square off without advance money or discount"
                                   >
-                                    Square Off & Invoice
+                                    Awaiting {inr(balDue)}
                                   </Button>
                                 </div>
                               )}
@@ -1045,8 +1155,8 @@ function ClearingPage() {
                             </div>
                           </div>
 
-                          {/* Quick Financial Inputs Grid */}
-                          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 bg-muted/30 p-3 rounded-lg border border-border/50 text-xs">
+                          {/* Clean 6-Column Financial Row */}
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 bg-muted/30 p-3 rounded-lg border border-border/50 text-xs">
                             <div>
                               <span className="text-muted-foreground block text-[10px] uppercase font-medium">
                                 Job Fee (Gross)
@@ -1096,47 +1206,7 @@ function ClearingPage() {
 
                             <div>
                               <span className="text-muted-foreground block text-[10px] uppercase font-medium">
-                                Other Ded (–)
-                              </span>
-                              <Input
-                                type="number"
-                                min={0}
-                                disabled={isInvoiced}
-                                className="h-7 text-xs font-mono mt-0.5 bg-background"
-                                value={d.other_deduction}
-                                onChange={(e) =>
-                                  setDrafts((prev) => ({
-                                    ...prev,
-                                    [j.id]: { ...d, other_deduction: e.target.value },
-                                  }))
-                                }
-                                placeholder="0"
-                              />
-                            </div>
-
-                            <div>
-                              <span className="text-muted-foreground block text-[10px] uppercase font-medium">
-                                Extra Fee (+)
-                              </span>
-                              <Input
-                                type="number"
-                                min={0}
-                                disabled={isInvoiced}
-                                className="h-7 text-xs font-mono mt-0.5 bg-background"
-                                value={d.other_addition}
-                                onChange={(e) =>
-                                  setDrafts((prev) => ({
-                                    ...prev,
-                                    [j.id]: { ...d, other_addition: e.target.value },
-                                  }))
-                                }
-                                placeholder="0"
-                              />
-                            </div>
-
-                            <div>
-                              <span className="text-muted-foreground block text-[10px] uppercase font-medium">
-                                Add GST
+                                GST Rate
                               </span>
                               <NativeSelect
                                 disabled={isInvoiced}
@@ -1161,10 +1231,10 @@ function ClearingPage() {
                                   }));
                                 }}
                               >
-                                <option value="0">No GST (0%)</option>
-                                <option value="18">GST 18%</option>
-                                <option value="12">GST 12%</option>
-                                <option value="5">GST 5%</option>
+                                <option value="0">0% (None)</option>
+                                <option value="18">18% GST</option>
+                                <option value="12">12% GST</option>
+                                <option value="5">5% GST</option>
                               </NativeSelect>
                             </div>
 
@@ -1177,7 +1247,7 @@ function ClearingPage() {
                               </span>
                               {taxAmt > 0 && (
                                 <span className="text-[10px] text-muted-foreground font-mono">
-                                  (+{inr(taxAmt)} tax)
+                                  (+{inr(taxAmt)} GST)
                                 </span>
                               )}
                             </div>
@@ -1185,7 +1255,7 @@ function ClearingPage() {
                             <div>
                               <div className="flex items-center justify-between">
                                 <span className="text-muted-foreground text-[10px] uppercase font-medium">
-                                  Jar Allocate
+                                  Allocate Advance
                                 </span>
                                 {!isInvoiced && (
                                   <button
@@ -1223,10 +1293,47 @@ function ClearingPage() {
                             </div>
                           </div>
 
+                          {/* Settlement Status Bar */}
+                          {!isInvoiced && (
+                            <div
+                              className={cn(
+                                "flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-md text-xs font-medium border",
+                                isFullyCovered
+                                  ? "bg-emerald-50/70 border-emerald-200 text-emerald-800 dark:bg-emerald-950/30 dark:border-emerald-800/60 dark:text-emerald-300"
+                                  : "bg-amber-50/70 border-amber-200 text-amber-800 dark:bg-amber-950/30 dark:border-amber-800/60 dark:text-amber-300",
+                              )}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-muted-foreground font-normal">Settlement:</span>
+                                {isFullyCovered ? (
+                                  <span className="font-semibold flex items-center gap-1 text-emerald-700 dark:text-emerald-300">
+                                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 inline" />
+                                    100% Settled ({inr(adv)} advance) · ₹0 Balance Due
+                                  </span>
+                                ) : (
+                                  <span className="font-semibold text-amber-900 dark:text-amber-200">
+                                    Shortfall: {inr(balDue)} unpaid
+                                  </span>
+                                )}
+                              </div>
+                              <div>
+                                {isFullyCovered ? (
+                                  <span className="text-[11px] text-emerald-700 dark:text-emerald-300">
+                                    Ready to Square Off as Paid in Full
+                                  </span>
+                                ) : (
+                                  <span className="text-[11px] text-amber-700 dark:text-amber-300">
+                                    Needs advance payment or discount to square off
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
                           {/* Expanded Details */}
                           {isExpanded && (
                             <div className="pt-2 border-t space-y-2 text-xs">
-                              <div className="grid grid-cols-2 gap-3">
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                                 <div>
                                   <span className="text-muted-foreground font-medium block">
                                     Other Deductions (–):
@@ -1248,7 +1355,26 @@ function ClearingPage() {
                                 </div>
                                 <div>
                                   <span className="text-muted-foreground font-medium block">
-                                    Clearing Notes:
+                                    Extra Fee / Out-of-pocket (+):
+                                  </span>
+                                  <Input
+                                    type="number"
+                                    min={0}
+                                    disabled={isInvoiced}
+                                    className="h-7 text-xs font-mono mt-1"
+                                    value={d.other_addition}
+                                    onChange={(e) =>
+                                      setDrafts((prev) => ({
+                                        ...prev,
+                                        [j.id]: { ...d, other_addition: e.target.value },
+                                      }))
+                                    }
+                                    placeholder="0"
+                                  />
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground font-medium block">
+                                    Clearing Remarks:
                                   </span>
                                   <Input
                                     disabled={isInvoiced}
@@ -1401,6 +1527,23 @@ function ClearingPage() {
                   </span>
                 </div>
               </div>
+
+              <Field label="Billing Entity / Company *">
+                <NativeSelect
+                  value={selectedFirmId}
+                  onChange={(e) => setSelectedFirmId(e.target.value)}
+                >
+                  {userFirms && userFirms.length > 0 ? (
+                    userFirms.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.name}
+                      </option>
+                    ))
+                  ) : (
+                    <option value={currentFirm?.id ?? ""}>{currentFirm?.name ?? "Default Firm"}</option>
+                  )}
+                </NativeSelect>
+              </Field>
 
               <Field label="GST / Tax Rate (%)">
                 <NativeSelect value={invTaxRate} onChange={(e) => setInvTaxRate(e.target.value)}>

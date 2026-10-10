@@ -21,6 +21,7 @@ import { StatusBadge } from "@/components/app/StatusBadge";
 import { usePermissions } from "@/hooks/use-permissions";
 import { errMsg, fmtDate, inr } from "@/lib/format";
 import { RECURRING_FREQS, SERVICE_TYPES } from "@/lib/service-options";
+import { fetchFirmServices } from "@/lib/standard-services";
 
 export const Route = createFileRoute("/_authenticated/services")({
   head: () => ({
@@ -48,14 +49,14 @@ const Req = () => <span className="ml-0.5 font-semibold text-destructive">*</spa
 
 function ServicesPage() {
   const { canCreate, canEdit } = usePermissions();
+  const qc = useQueryClient();
   const [editing, setEditing] = useState<Svc | "new" | null>(null);
 
   const q = useQuery({
     queryKey: ["services-all"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("services").select("*").order("name");
-      if (error) throw error;
-      return data;
+      const data = await fetchFirmServices();
+      return (data ?? []) as Svc[];
     },
   });
 
@@ -102,10 +103,24 @@ function ServicesPage() {
         subtitle="What your firm offers. Fees and due-day rules are set per client assignment."
         actions={
           canCreate("services") && (
-            <Button onClick={() => setEditing("new")}>
-              <Plus className="mr-1 h-4 w-4" />
-              Add Service
-            </Button>
+            <div className="flex items-center gap-2">
+              {(!q.data || q.data.length === 0) && !q.isLoading && (
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    await fetchFirmServices();
+                    await qc.invalidateQueries({ queryKey: ["services-all"] });
+                    toast.success("Standard CA practice services loaded");
+                  }}
+                >
+                  Load Standard Services
+                </Button>
+              )}
+              <Button onClick={() => setEditing("new")}>
+                <Plus className="mr-1 h-4 w-4" />
+                Add Service
+              </Button>
+            </div>
           )
         }
       />

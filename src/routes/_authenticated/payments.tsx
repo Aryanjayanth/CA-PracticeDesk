@@ -2,6 +2,15 @@ import { createFileRoute, Link, useNavigate, useRouteContext } from "@tanstack/r
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import {
+  ArrowDownLeft,
+  Wallet,
+  Users,
+  Receipt,
+  PlusCircle,
+  History,
+  ArrowRight,
+} from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,19 +21,20 @@ import { StatusBadge } from "@/components/app/StatusBadge";
 import { useClientLookup } from "@/hooks/use-roles";
 import { usePermissions } from "@/hooks/use-permissions";
 import { readList } from "@/lib/supabase-read";
-import { errMsg, fmtDate, inr, MODES, today } from "@/lib/format";
+import { downloadCsv, errMsg, fmtDate, inr, MODES, today } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/payments")({
   head: () => ({
     meta: [
-      { title: "Payment Entry — CA PracticeDesk" },
-      { name: "description", content: "Record payments received." },
+      { title: "Payments — CA PracticeDesk" },
+      { name: "description", content: "Record client payments, advances, and collections." },
     ],
   }),
   component: PaymentsPage,
 });
 
-const empty = {
+const emptyPayment = {
   job_id: "",
   amount: "",
   mode: "upi",
@@ -39,6 +49,16 @@ function PaymentsPage() {
   const { canCreate, canEdit, canSeeAmounts } = usePermissions();
   const qc = useQueryClient();
   const { data: clients } = useClientLookup();
+
+  // Active view switcher: "entry" | "history"
+  const [view, setView] = useState<"entry" | "history">("entry");
+
+  // Payment Form state
+  const [payClientId, setPayClientId] = useState("");
+  const [payForm, setPayForm] = useState(emptyPayment);
+  const [payBusy, setPayBusy] = useState(false);
+  const [rev, setRev] = useState<string | null>(null);
+
   const { data: jobs } = useQuery({
     queryKey: ["job-lookup"],
     queryFn: async () => {
@@ -48,30 +68,17 @@ function PaymentsPage() {
         .neq("status", "cancelled")
         .order("created_at", { ascending: false });
       if (error) throw error;
-      return data;
+      return data ?? [];
     },
   });
-  const [clientId, setClientId] = useState("");
-  const [f, setF] = useState(empty);
-  const [busy, setBusy] = useState(false);
-  const [rev, setRev] = useState<string | null>(null);
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) =>
-    setF((p) => ({ ...p, [k]: e.target.value }));
 
-  const clientJobs = useMemo(() => {
-    if (!clientId) return [];
-    return (jobs ?? []).filter((j) => j.client_id === clientId);
-  }, [jobs, clientId]);
+  const payClientJobs = useMemo(() => {
+    if (!payClientId) return [];
+    return (jobs ?? []).filter((j) => j.client_id === payClientId);
+  }, [jobs, payClientId]);
 
-  const handleClientChange = (id: string) => {
-    setClientId(id);
-    setF((prev) => ({ ...prev, job_id: "" }));
-  };
-
-  // Read through the RPC rather than the table: it blanks `amount` server-side
-  // unless this user holds the payments "amounts" grant, so the figure never
-  // reaches the browser for someone who may record but not read money.
-  const q = useQuery({
+  // Payments Query
+  const payQuery = useQuery({
     queryKey: ["payments"],
     queryFn: () =>
       readList("payments_list", {}, () =>
@@ -83,63 +90,73 @@ function PaymentsPage() {
           .order("created_at", { ascending: false }),
       ),
   });
-  const cname = (id: string) => clients?.find((c) => c.id === id)?.name ?? "—";
-  const jcode = (id: string | null) => (id ? jobs?.find((j) => j.id === id)?.job_code ?? "—" : null);
 
-  const save = async (e: React.FormEvent) => {
+  const cname = (id: string | null) => (id ? clients?.find((c) => c.id === id)?.name ?? "—" : "—");
+  const jcode = (id: string | null) => (id ? jobs?.find((j) => j.id === id)?.job_code ?? null : null);
+
+  // Financial calculations
+  const totalInflow = useMemo(() => {
+    const p = payQuery.data ?? [];
+    return p
+      .filter((r) => r.status !== "reversed" && r.amount != null)
+      .reduce((sum, r) => sum + Number(r.amount), 0);
+  }, [payQuery.data]);
+
+  const activePayments = useMemo(() => {
+    const p = payQuery.data ?? [];
+    return p.filter((r) => r.status !== "reversed");
+  }, [payQuery.data]);
+
+  const uniqueClientsCount = useMemo(() => {
+    const set = new Set(activePayments.map((p) => p.client_id).filter(Boolean));
+    return set.size;
+  }, [activePayments]);
+
+  const handlePayClientChange = (id: string) => {
+    setPayClientId(id);
+    setPayForm((prev) => ({ ...prev, job_id: "" }));
+  };
+
+  const setP = (k: keyof typeof payForm) => (e: { target: { value: string } }) =>
+    setPayForm((prev) => ({ ...prev, [k]: e.target.value }));
+
+  // Save Payment
+  const savePayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canCreate("payments")) return toast.error("You do not have permission to record payments");
-    if (!clientId) return toast.error("Please select a client first");
-    const amt = Number(f.amount);
+    if (!payClientId) return toast.error("Please select a client");
+    const amt = Number(payForm.amount);
     if (!(amt > 0)) return toast.error("Amount must be greater than zero");
-    if (f.payment_date > today()) return toast.error("Payment date can't be in the future");
-    if (f.mode !== "cash" && !f.reference.trim())
-      return toast.error("Reference number is required for non-cash payments");
-    const dup = q.data?.find(
-      (p) =>
-        p.status !== "reversed" &&
-        p.client_id === clientId &&
-        (f.job_id ? p.job_id === f.job_id : !p.job_id) &&
-        Number(p.amount) === amt &&
-        (p.payment_date === f.payment_date || (f.reference && p.reference === f.reference)),
-    );
-    if (
-      dup &&
-      !confirm(
-        `Possible duplicate of ${dup.payment_code} (${inr(dup.amount)} on ${fmtDate(dup.payment_date)}). Save anyway?`,
-      )
-    )
-      return;
-    setBusy(true);
+    if (payForm.payment_date > today()) return toast.error("Payment date can't be in the future");
+
+    setPayBusy(true);
     const { error } = await supabase.from("payments").insert({
-      client_id: clientId,
-      job_id: f.job_id || null,
+      client_id: payClientId,
+      job_id: payForm.job_id || null,
       amount: amt,
-      mode: f.mode,
-      payment_date: f.payment_date,
-      reference: f.reference.trim() || null,
-      narration: f.narration.trim() || null,
+      mode: payForm.mode,
+      payment_date: payForm.payment_date,
+      reference: null,
+      narration: payForm.narration.trim() || null,
       created_by: user.id,
     });
-    setBusy(false);
+    setPayBusy(false);
     if (error) return toast.error(errMsg(error));
     toast.success("Payment recorded successfully", {
-      description: f.job_id
-        ? "You can now clear and square off this payment under Payment Clearing."
-        : "Recorded as Client Balance. Settle or clear it against jobs under Payment Clearing.",
-      action: f.job_id
-        ? {
-            label: "Open Clearing",
-            onClick: () => navigate({ to: "/clearing/$jobId", params: { jobId: f.job_id }, search: {} }),
-          }
-        : undefined,
+      description: payForm.job_id
+        ? "Linked to job. You can manage square-off under Payment Clearing."
+        : "Recorded as Client Balance.",
+      action: {
+        label: "View History",
+        onClick: () => setView("history"),
+      },
     });
-    setF(empty);
-    setClientId("");
+    setPayForm(emptyPayment);
+    setPayClientId("");
     qc.invalidateQueries();
   };
 
-  const reverse = async (reason: string) => {
+  const reversePayment = async (reason: string) => {
     const { error } = await supabase.rpc("reverse_payment", { _payment_id: rev!, _reason: reason });
     if (error) {
       toast.error(errMsg(error));
@@ -149,235 +166,346 @@ function PaymentsPage() {
     qc.invalidateQueries();
   };
 
-  return (
+  const renderForm = (compact = false) => (
+    <Card className="shadow-none">
+      <CardHeader className="pb-3 border-b border-border/40">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Wallet className="h-4 w-4 text-primary" />
+            <CardTitle className="text-sm font-semibold">Record a Payment</CardTitle>
+          </div>
+          {!compact && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground cursor-pointer"
+              onClick={() => setView("history")}
+            >
+              View History ({activePayments.length})
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="pt-4">
+        <form onSubmit={savePayment} className="space-y-3.5">
+          <Field label="Client *">
+            <ClientSelect
+              value={payClientId}
+              onChange={handlePayClientChange}
+              placeholder="Search and select client…"
+            />
+          </Field>
+
+          {payClientId && (
+            <Field label="Specific Job (Optional)">
+              <NativeSelect
+                value={payForm.job_id}
+                onChange={(e) => setPayForm((prev) => ({ ...prev, job_id: e.target.value }))}
+              >
+                <option value="">General Client Payment (Client Balance)</option>
+                {payClientJobs.map((j) => (
+                  <option key={j.id} value={j.id}>
+                    {j.job_code} — {j.title}
+                  </option>
+                ))}
+              </NativeSelect>
+            </Field>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Field label="Amount (₹) *">
+              <Input
+                type="number"
+                min={0}
+                step="0.01"
+                value={payForm.amount}
+                onChange={setP("amount")}
+                placeholder="0.00"
+                className="font-mono text-base font-semibold"
+              />
+            </Field>
+
+            <Field label="Date *">
+              <Input
+                type="date"
+                max={today()}
+                value={payForm.payment_date}
+                onChange={setP("payment_date")}
+              />
+            </Field>
+
+            <Field label="Payment Mode">
+              <NativeSelect value={payForm.mode} onChange={setP("mode")}>
+                {Object.entries(MODES).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v}
+                  </option>
+                ))}
+              </NativeSelect>
+            </Field>
+          </div>
+
+          <Field label="Narration / Remarks (Optional)">
+            <Input
+              value={payForm.narration}
+              onChange={setP("narration")}
+              placeholder="e.g. Advance payment / Bank deposit / Received in full"
+            />
+          </Field>
+
+          <Button className="w-full font-medium" disabled={payBusy}>
+            {payBusy ? "Saving…" : "Save Payment Receipt"}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+
+  const renderTable = (compact = false) => (
     <div>
+      {!compact && canCreate("payments") && (
+        <div className="mb-3 flex items-center justify-between">
+          <div className="text-xs text-muted-foreground">
+            Total active receipts: <strong className="text-foreground">{activePayments.length}</strong>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => setView("entry")}
+            className="h-8 text-xs gap-1.5 font-medium cursor-pointer"
+          >
+            <PlusCircle className="h-3.5 w-3.5" />
+            Record a Payment
+          </Button>
+        </div>
+      )}
+      <DataTable
+        rows={payQuery.data}
+        loading={payQuery.isLoading}
+        onRowClick={(p) => {
+          if (p.job_id) {
+            navigate({ to: "/clearing/$jobId", params: { jobId: p.job_id }, search: {} });
+          } else {
+            navigate({ to: "/clients/$id", params: { id: p.client_id } });
+          }
+        }}
+        empty="No payments recorded yet."
+        search={(p) =>
+          `${p.payment_code} ${cname(p.client_id)} ${jcode(p.job_id) ?? "Client Balance"}`
+        }
+        exportFilename="payments"
+        exportTransform={(p) => ({
+          "Receipt Code": p.payment_code,
+          "Client": cname(p.client_id),
+          "Job": jcode(p.job_id) ?? "Client Balance",
+          "Date": fmtDate(p.payment_date),
+          "Mode": MODES[p.mode] ?? p.mode,
+          "Amount": canSeeAmounts("payments") && p.amount != null ? p.amount : "—",
+          "Status": p.status,
+          "Notes": p.narration ?? "",
+        })}
+        columns={[
+          {
+            key: "payment_code",
+            header: "Receipt",
+            sort: (p) => p.payment_code,
+            className: "font-mono text-xs font-semibold text-primary",
+          },
+          {
+            key: "c",
+            header: "Client",
+            render: (p) => (
+              <div className="flex flex-col">
+                <span className="font-semibold text-sm text-foreground">{cname(p.client_id)}</span>
+                {jcode(p.job_id) && (
+                  <span className="text-[11px] font-mono text-muted-foreground">
+                    Job: {jcode(p.job_id)}
+                  </span>
+                )}
+              </div>
+            ),
+          },
+          {
+            key: "d",
+            header: "Date",
+            sort: (p) => p.payment_date,
+            render: (p) => fmtDate(p.payment_date),
+          },
+          {
+            key: "mode",
+            header: "Mode",
+            render: (p) => (
+              <span className="text-xs uppercase text-muted-foreground">{MODES[p.mode] ?? p.mode}</span>
+            ),
+          },
+          {
+            key: "a",
+            header: "Amount",
+            align: "right",
+            sort: (p) => Number(p.amount),
+            render: (p) => (
+              <span className="font-mono font-semibold text-foreground">
+                {canSeeAmounts("payments") && p.amount != null ? inr(p.amount) : "—"}
+              </span>
+            ),
+          },
+          {
+            key: "s",
+            header: "Status",
+            render: (p) => <StatusBadge status={p.status} />,
+          },
+          ...(canEdit("payments")
+            ? [
+                {
+                  key: "x",
+                  header: "",
+                  render: (p: { id: string; status: string }) =>
+                    p.status !== "reversed" && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-destructive h-7 px-2 text-xs"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRev(p.id);
+                        }}
+                      >
+                        Reverse
+                      </Button>
+                    ),
+                },
+              ]
+            : []),
+        ]}
+      />
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
       <PageHeader
         title="Payment Entry"
-        subtitle="Record money received. New payments start as Unallocated."
+        subtitle="Record client payments, advances, and collections with direct receipt tracking."
+        actions={
+          <div className="inline-flex rounded-lg border bg-muted/40 p-0.5 text-xs">
+            <button
+              type="button"
+              onClick={() => setView("entry")}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-all cursor-pointer",
+                view === "entry"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <PlusCircle className="h-3.5 w-3.5" />
+              Record Payment
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("history")}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-all cursor-pointer",
+                view === "history"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <History className="h-3.5 w-3.5" />
+              Payment History {activePayments.length > 0 && `(${activePayments.length})`}
+            </button>
+          </div>
+        }
       />
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Card className="shadow-none">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">New Payment</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={save} className="space-y-3">
-              <Field label="Client *">
-                <ClientSelect
-                  value={clientId}
-                  onChange={handleClientChange}
-                  placeholder="Search and select client…"
-                />
-              </Field>
 
-              {clientId && (
-                <Field label="Specific Job (Optional)">
-                  <NativeSelect
-                    value={f.job_id}
-                    onChange={(e) => setF((prev) => ({ ...prev, job_id: e.target.value }))}
-                  >
-                    <option value="">General Client Payment (No specific job)</option>
-                    {clientJobs.map((j) => (
-                      <option key={j.id} value={j.id}>
-                        {j.job_code} — {j.title}
-                      </option>
-                    ))}
-                  </NativeSelect>
-                </Field>
-              )}
+      {/* Summary KPI Cards */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="flex items-center gap-3 rounded-lg border bg-card p-3 shadow-none">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:bg-emerald-950/50">
+            <ArrowDownLeft className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="text-[11px] text-muted-foreground">Total Collections</div>
+            <div className="text-base font-bold text-foreground">
+              {canSeeAmounts("payments") ? inr(totalInflow) : "—"}
+            </div>
+          </div>
+        </div>
 
-              {clientId && (
-                <p className="text-xs text-muted-foreground bg-muted/30 p-2.5 rounded-lg border border-border/40">
-                  {f.job_id
-                    ? "Recorded for this specific job. You can settle fees, TDS, and deductions on Payment Clearing."
-                    : "Recorded at client level as advance/unallocated balance. You can allocate and square it off on any job's Payment Clearing sheet."}
-                </p>
-              )}
+        <div className="flex items-center gap-3 rounded-lg border bg-card p-3 shadow-none">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <Receipt className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="text-[11px] text-muted-foreground">Active Receipts</div>
+            <div className="text-base font-bold text-foreground">{activePayments.length}</div>
+          </div>
+        </div>
 
-              <Field label="Amount (₹) *">
-                <Input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={f.amount}
-                  onChange={set("amount")}
-                  placeholder="0.00"
-                />
-              </Field>
-
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Mode">
-                  <NativeSelect value={f.mode} onChange={set("mode")}>
-                    {Object.entries(MODES).map(([k, v]) => (
-                      <option key={k} value={k}>
-                        {v}
-                      </option>
-                    ))}
-                  </NativeSelect>
-                </Field>
-                <Field label="Date">
-                  <Input
-                    type="date"
-                    max={today()}
-                    value={f.payment_date}
-                    onChange={set("payment_date")}
-                  />
-                </Field>
-              </div>
-
-              <Field label="Reference No.">
-                <Input
-                  value={f.reference}
-                  onChange={set("reference")}
-                  placeholder="UPI / UTR / Cheque no."
-                />
-              </Field>
-
-              <Field label="Narration">
-                <Input
-                  value={f.narration}
-                  onChange={set("narration")}
-                  placeholder="Optional remarks…"
-                />
-              </Field>
-
-              <Button className="w-full font-medium" disabled={busy}>
-                {busy ? "Saving…" : "Save Payment"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-        <div className="lg:col-span-2">
-          <DataTable
-            rows={q.data}
-            loading={q.isLoading}
-            onRowClick={(p) => {
-              if (p.job_id) {
-                navigate({ to: "/clearing/$jobId", params: { jobId: p.job_id }, search: {} });
-              } else {
-                navigate({ to: "/clients/$id", params: { id: p.client_id } });
-              }
-            }}
-            empty="No payments recorded yet."
-            search={(p) =>
-              `${p.payment_code} ${p.reference} ${cname(p.client_id)} ${jcode(p.job_id) ?? "Client Balance"}`
-            }
-            exportFilename="payments"
-            exportTransform={(p) => ({
-              "Payment Code": p.payment_code,
-              "Client": cname(p.client_id),
-              "Job": jcode(p.job_id) ?? "Client Balance",
-              "Payment Date": fmtDate(p.payment_date),
-              "Mode": MODES[p.mode] ?? p.mode,
-              "Reference": p.reference ?? "",
-              "Amount": canSeeAmounts("payments") && p.amount != null ? p.amount : "—",
-              "Status": p.status,
-              "Narration": p.narration ?? "",
-            })}
-            columns={[
-              {
-                key: "payment_code",
-                header: "Receipt",
-                sort: (p) => p.payment_code,
-                className: "font-mono text-xs font-semibold text-primary",
-              },
-              {
-                key: "c",
-                header: "Client",
-                render: (p) => (
-                  <span className="font-medium text-foreground">{cname(p.client_id)}</span>
-                ),
-              },
-              {
-                key: "j",
-                header: "Job / Allocation",
-                sort: (p) => jcode(p.job_id) ?? "",
-                className: "font-mono text-xs",
-                render: (p) => (
-                  p.job_id ? (
-                    <span className="font-mono text-xs font-medium text-muted-foreground">
-                      {jcode(p.job_id)}
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
-                      Client Balance
-                    </span>
-                  )
-                ),
-              },
-              {
-                key: "d",
-                header: "Date",
-                sort: (p) => p.payment_date,
-                render: (p) => fmtDate(p.payment_date),
-              },
-              { key: "m", header: "Mode", render: (p) => MODES[p.mode] },
-              { key: "reference", header: "Reference" },
-              {
-                key: "a",
-                header: "Amount",
-                align: "right",
-                sort: (p) => Number(p.amount),
-                render: (p) => (canSeeAmounts("payments") ? inr(p.amount) : "—"),
-              },
-              { key: "s", header: "Status", render: (p) => <StatusBadge status={p.status} /> },
-              {
-                key: "clearing",
-                header: "Clearing",
-                render: (p) => (
-                  p.job_id ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-xs font-medium"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        navigate({ to: "/clearing/$jobId", params: { jobId: p.job_id! }, search: {} });
-                      }}
-                    >
-                      Clearing
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 text-xs font-medium text-muted-foreground"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        navigate({ to: "/clients/$id", params: { id: p.client_id } });
-                      }}
-                    >
-                      View Client
-                    </Button>
-                  )
-                ),
-              },
-              ...(canEdit("payments")
-                ? [
-                    {
-                      key: "x",
-                      header: "",
-                      render: (p: { id: string; status: string }) =>
-                        p.status !== "reversed" && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-destructive h-7 px-2 text-xs"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setRev(p.id);
-                            }}
-                          >
-                            Reverse
-                          </Button>
-                        ),
-                    },
-                  ]
-                : []),
-            ]}
-          />
+        <div className="flex items-center gap-3 rounded-lg border bg-card p-3 shadow-none">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-500/10 text-blue-600 dark:bg-blue-950/50">
+            <Users className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="text-[11px] text-muted-foreground">Clients Collected From</div>
+            <div className="text-base font-bold text-foreground">{uniqueClientsCount}</div>
+          </div>
         </div>
       </div>
+
+      {/* Switchable Views */}
+      {view === "entry" && (
+        <div className="max-w-2xl mx-auto space-y-4">
+          {canCreate("payments") ? (
+            renderForm(false)
+          ) : (
+            <div className="rounded-lg border border-dashed p-12 text-center text-sm text-muted-foreground">
+              You do not have permission to record payments.
+            </div>
+          )}
+
+          {activePayments.length > 0 && (
+            <Card className="shadow-none border border-border/60">
+              <CardHeader className="py-2.5 px-4 border-b border-border/40">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-foreground">Recent Payment Receipts</span>
+                  <button
+                    type="button"
+                    onClick={() => setView("history")}
+                    className="text-primary hover:underline font-medium cursor-pointer"
+                  >
+                    View All History ({activePayments.length}) →
+                  </button>
+                </div>
+              </CardHeader>
+              <div className="divide-y text-xs">
+                {activePayments.slice(0, 5).map((p) => (
+                  <div key={p.id} className="flex items-center justify-between p-3 hover:bg-muted/30">
+                    <div>
+                      <div className="font-semibold text-foreground">{cname(p.client_id)}</div>
+                      <div className="text-[11px] text-muted-foreground font-mono">
+                        {p.payment_code} · {fmtDate(p.payment_date)} · {MODES[p.mode] ?? p.mode}
+                        {p.narration ? ` · ${p.narration}` : ""}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-mono font-bold text-foreground">
+                        {canSeeAmounts("payments") && p.amount != null ? inr(p.amount) : "—"}
+                      </div>
+                      <StatusBadge status={p.status} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {view === "history" && <div>{renderTable(false)}</div>}
+
+      {/* Reverse Payment Dialog */}
       <ReasonDialog
         open={!!rev}
         onOpenChange={(o) => !o && setRev(null)}
@@ -385,7 +513,7 @@ function PaymentsPage() {
         description="The payment stays on record as Reversed. Any allocations are undone and invoice balances restored."
         confirmLabel="Reverse"
         destructive
-        onConfirm={reverse}
+        onConfirm={reversePayment}
       />
     </div>
   );

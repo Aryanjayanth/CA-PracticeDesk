@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Trash2 } from "lucide-react";
+import { Trash2, PlusCircle, History, Columns2, ArrowRight } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -69,6 +69,7 @@ function ExpensesPage() {
   const [busy, setBusy] = useState(false);
   const [del, setDel] = useState<{ id: string; what: string } | null>(null);
   const [filter, setFilter] = useState<ExpenseKind | "">("");
+  const [view, setView] = useState<"entry" | "history">("entry");
   const { data: clients } = useClientLookup();
 
   // Read through the RPC so `amount` is already NULL unless this user holds the
@@ -175,25 +176,392 @@ function ExpensesPage() {
 
   if (!canView(MODULE)) return <NoAccess />;
 
+  const renderForm = (compact = false) => (
+    <Card className="shadow-none">
+      <CardHeader className="pb-3 border-b border-border/40">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm font-semibold">Record an Expense</CardTitle>
+          {!compact && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground cursor-pointer"
+              onClick={() => setView("history")}
+            >
+              View History ({rows.length})
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="pt-4">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save();
+          }}
+          className="space-y-3.5"
+        >
+          <Field label="Client (Optional)">
+            <ClientSelect
+              value={draft.client_id}
+              onChange={(id) => {
+                set("client_id")(id);
+                set("job_id")("");
+              }}
+              noneLabel="Firm Overhead (No client)"
+              placeholder="Select client or search…"
+            />
+          </Field>
+
+          {draft.client_id && (
+            <Field label="Job *">
+              <NativeSelect
+                value={draft.job_id}
+                onChange={(e) => set("job_id")(e.target.value)}
+              >
+                <option value="">Select job…</option>
+                {jobsForClient.map((j) => (
+                  <option key={j.id} value={j.id}>
+                    {j.job_code} · {j.title}
+                  </option>
+                ))}
+              </NativeSelect>
+            </Field>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Kind">
+              <NativeSelect
+                value={draft.kind}
+                onChange={(e) => set("kind")(e.target.value as ExpenseKind)}
+              >
+                {EXPENSE_KINDS.map((k) => (
+                  <option key={k} value={k}>
+                    {KIND_LABEL[k]}
+                  </option>
+                ))}
+              </NativeSelect>
+            </Field>
+            <Field label="Category">
+              <Input
+                list="category-suggestions"
+                value={draft.category}
+                onChange={(e) => set("category")(e.target.value)}
+                placeholder="Category name…"
+              />
+              <datalist id="category-suggestions">
+                {CATEGORY_SUGGESTIONS[draft.kind].map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
+            </Field>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Amount (₹) *">
+              <Input
+                type="number"
+                min={0}
+                step="0.01"
+                value={draft.amount}
+                onChange={(e) => set("amount")(e.target.value)}
+                placeholder="0.00"
+              />
+            </Field>
+            <Field label="Date">
+              <Input
+                type="date"
+                max={today()}
+                value={draft.expense_date}
+                onChange={(e) => set("expense_date")(e.target.value)}
+              />
+            </Field>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Payment Mode">
+              <NativeSelect value={draft.mode} onChange={(e) => set("mode")(e.target.value)}>
+                {Object.entries(MODES).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v}
+                  </option>
+                ))}
+              </NativeSelect>
+            </Field>
+            <Field label="Paid To">
+              <Input
+                value={draft.paid_to}
+                onChange={(e) => set("paid_to")(e.target.value)}
+                placeholder="Payee / vendor"
+              />
+            </Field>
+          </div>
+
+          <Field label="Reference">
+            <Input
+              value={draft.reference}
+              onChange={(e) => set("reference")(e.target.value)}
+              placeholder="UTR / Challan / Bill no."
+            />
+          </Field>
+
+          <Field label="Notes">
+            <Textarea
+              rows={2}
+              value={draft.notes}
+              onChange={(e) => set("notes")(e.target.value)}
+              placeholder="Additional remarks…"
+            />
+          </Field>
+
+          <Field label="Description (Optional)">
+            <Input
+              value={draft.description}
+              onChange={(e) => set("description")(e.target.value)}
+              placeholder="Enter description (optional)…"
+            />
+          </Field>
+
+          <Button className="w-full font-medium" disabled={busy}>
+            {busy ? "Saving…" : "Save Expense"}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+
+  const renderTable = (compact = false) => (
+    <div>
+      {!compact && canCreate(MODULE) && (
+        <div className="mb-3 flex items-center justify-between">
+          <div className="text-xs text-muted-foreground">
+            Total expenses recorded: <strong className="text-foreground">{rows.length}</strong>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => setView("entry")}
+            className="h-8 text-xs gap-1.5 font-medium cursor-pointer"
+          >
+            <PlusCircle className="h-3.5 w-3.5" />
+            Record an Expense
+          </Button>
+        </div>
+      )}
+      <DataTable
+        rows={rows}
+        loading={q.isLoading}
+        empty={
+          filter
+            ? `No ${KIND_LABEL[filter as ExpenseKind].toLowerCase()} recorded yet.`
+            : "No expenses recorded yet."
+        }
+        search={(e) =>
+          `${e.category} ${e.description} ${e.reference ?? ""} ${e.paid_to ?? ""} ${e.job_code ?? ""} ${e.client_name ?? ""}`
+        }
+        exportFilename="expenses"
+        exportTransform={(e) => ({
+          "Client": e.client_name ?? "Firm Overhead",
+          "Job Code": e.job_code ?? "",
+          "Date": fmtDate(e.expense_date),
+          "Kind": KIND_LABEL[e.kind],
+          "Category": e.category,
+          "Description": e.description,
+          "Paid To": e.paid_to ?? "",
+          "Mode": MODES[e.mode] ?? e.mode,
+          "Reference": e.reference ?? "",
+          "Amount": canSeeAmounts("expenses") && e.amount != null ? e.amount : "—",
+          "Notes": e.notes ?? "",
+        })}
+        columns={[
+          {
+            key: "client_name",
+            header: "Client / Job",
+            align: "left",
+            sort: (e) => e.client_name ?? "",
+            render: (e) => (
+              <div className="flex flex-col min-w-[140px]">
+                <span className="font-semibold text-sm text-foreground leading-tight">
+                  {e.client_name ?? (
+                    <span className="text-muted-foreground/80 font-normal italic">Firm Overhead</span>
+                  )}
+                </span>
+                {e.job_code ? (
+                  <span className="text-[11px] font-mono font-medium text-muted-foreground flex items-center gap-1 mt-0.5">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary/70"></span>
+                    {e.job_code}
+                  </span>
+                ) : null}
+              </div>
+            ),
+          },
+          {
+            key: "description",
+            header: "Description",
+            render: (e) => (
+              <div className="flex flex-col max-w-[280px]">
+                <span className="text-sm font-medium text-foreground leading-snug">{e.description}</span>
+                <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground flex-wrap">
+                  {e.paid_to && (
+                    <span>
+                      Paid to: <strong className="font-medium text-foreground/80">{e.paid_to}</strong>
+                    </span>
+                  )}
+                  {e.reference && (
+                    <span className="font-mono text-[11px] bg-muted/60 px-1.5 py-0.5 rounded border border-border/40">
+                      Ref: {e.reference}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ),
+          },
+          {
+            key: "kind",
+            header: "Kind",
+            render: (e) => (
+              <span
+                className={cn(
+                  "inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold whitespace-nowrap",
+                  KIND_IS_COST[e.kind]
+                    ? "bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20"
+                    : e.kind === "tax"
+                      ? "bg-sky-500/10 text-sky-700 dark:text-sky-400 border border-sky-500/20"
+                      : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20",
+                )}
+              >
+                {KIND_LABEL[e.kind]}
+              </span>
+            ),
+          },
+          {
+            key: "category",
+            header: "Category",
+            sort: (e) => e.category,
+            render: (e) => (
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-muted text-muted-foreground border border-border/40 whitespace-nowrap">
+                {e.category}
+              </span>
+            ),
+          },
+          {
+            key: "expense_date",
+            header: "Date",
+            sort: (e) => e.expense_date,
+            render: (e) => (
+              <span className="text-xs text-muted-foreground whitespace-nowrap font-medium">
+                {fmtDate(e.expense_date)}
+              </span>
+            ),
+          },
+          {
+            key: "mode",
+            header: "Mode",
+            render: (e) => (
+              <span
+                className={cn(
+                  "inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium capitalize whitespace-nowrap",
+                  e.mode === "bank"
+                    ? "bg-blue-500/10 text-blue-700 dark:text-blue-400 border border-blue-500/20"
+                    : e.mode === "cash"
+                      ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20"
+                      : "bg-purple-500/10 text-purple-700 dark:text-purple-400 border border-purple-500/20",
+                )}
+              >
+                {MODES[e.mode] ?? e.mode}
+              </span>
+            ),
+          },
+          {
+            key: "amount",
+            header: "Amount",
+            align: "right",
+            sort: (e) => Number(e.amount ?? 0),
+            render: (e) => (
+              <span className="font-semibold text-sm tabular-nums text-foreground">
+                {e.amount == null ? "—" : inr(e.amount)}
+              </span>
+            ),
+          },
+          ...(canDelete(MODULE)
+            ? [
+                {
+                  key: "x",
+                  header: "",
+                  render: (e: ExpenseRow) => (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                      title="Delete this expense"
+                      onClick={() =>
+                        setDel({ id: e.id, what: `${e.description} · ${inr(e.amount)}` })
+                      }
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  ),
+                },
+              ]
+            : []),
+        ]}
+      />
+    </div>
+  );
+
   return (
     <div>
       <PageHeader
         title="Expenses"
         subtitle="Every rupee that leaves the firm, kept apart by kind so the totals mean something."
         actions={
-          <NativeSelect
-            value={filter}
-            onChange={(e) => setFilter(e.target.value as ExpenseKind | "")}
-            className="w-44"
-            aria-label="Filter by kind"
-          >
-            <option value="">All kinds</option>
-            {EXPENSE_KINDS.map((k) => (
-              <option key={k} value={k}>
-                {KIND_LABEL[k]}
-              </option>
-            ))}
-          </NativeSelect>
+          <div className="flex items-center gap-2">
+            <div className="inline-flex rounded-lg border bg-muted/40 p-0.5 text-xs">
+              <button
+                type="button"
+                onClick={() => setView("entry")}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-all cursor-pointer",
+                  view === "entry"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <PlusCircle className="h-3.5 w-3.5" />
+                Expense Entry
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("history")}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-all cursor-pointer",
+                  view === "history"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <History className="h-3.5 w-3.5" />
+                Expense History {rows.length > 0 && `(${rows.length})`}
+              </button>
+            </div>
+
+            {view === "history" && (
+              <NativeSelect
+                value={filter}
+                onChange={(e) => setFilter(e.target.value as ExpenseKind | "")}
+                className="w-36 text-xs h-8"
+                aria-label="Filter by kind"
+              >
+                <option value="">All kinds</option>
+                {EXPENSE_KINDS.map((k) => (
+                  <option key={k} value={k}>
+                    {KIND_LABEL[k]}
+                  </option>
+                ))}
+              </NativeSelect>
+            )}
+          </div>
         }
       />
 
@@ -217,310 +585,57 @@ function ExpensesPage() {
         </p>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        {canCreate(MODULE) && (
-          <Card className="shadow-none">
-            <CardHeader className="pb-3 border-b border-border/40">
-              <CardTitle className="text-sm font-semibold">Record an Expense</CardTitle>
-            </CardHeader>
-            <CardContent className="pt-4">
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void save();
-                }}
-                className="space-y-3.5"
-              >
-                <Field label="Client (Optional)">
-                  <ClientSelect
-                    value={draft.client_id}
-                    onChange={(id) => {
-                      set("client_id")(id);
-                      set("job_id")("");
-                    }}
-                    noneLabel="Firm Overhead (No client)"
-                    placeholder="Select client or search…"
-                  />
-                </Field>
+      {view === "entry" && (
+        <div className="max-w-2xl mx-auto space-y-4">
+          {canCreate(MODULE) ? (
+            renderForm(false)
+          ) : (
+            <div className="rounded-lg border border-dashed p-12 text-center text-sm text-muted-foreground">
+              You do not have permission to record expenses.
+            </div>
+          )}
 
-                {draft.client_id && (
-                  <Field label="Job *">
-                    <NativeSelect
-                      value={draft.job_id}
-                      onChange={(e) => set("job_id")(e.target.value)}
-                    >
-                      <option value="">Select job…</option>
-                      {jobsForClient.map((j) => (
-                        <option key={j.id} value={j.id}>
-                          {j.job_code} · {j.title}
-                        </option>
-                      ))}
-                    </NativeSelect>
-                  </Field>
-                )}
-
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Kind">
-                    <NativeSelect
-                      value={draft.kind}
-                      onChange={(e) => set("kind")(e.target.value as ExpenseKind)}
-                    >
-                      {EXPENSE_KINDS.map((k) => (
-                        <option key={k} value={k}>
-                          {KIND_LABEL[k]}
-                        </option>
-                      ))}
-                    </NativeSelect>
-                  </Field>
-                  <Field label="Category">
-                    <Input
-                      list="category-suggestions"
-                      value={draft.category}
-                      onChange={(e) => set("category")(e.target.value)}
-                      placeholder="Category name…"
-                    />
-                    <datalist id="category-suggestions">
-                      {CATEGORY_SUGGESTIONS[draft.kind].map((c) => (
-                        <option key={c} value={c} />
-                      ))}
-                    </datalist>
-                  </Field>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Amount (₹) *">
-                    <Input
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={draft.amount}
-                      onChange={(e) => set("amount")(e.target.value)}
-                      placeholder="0.00"
-                    />
-                  </Field>
-                  <Field label="Date">
-                    <Input
-                      type="date"
-                      max={today()}
-                      value={draft.expense_date}
-                      onChange={(e) => set("expense_date")(e.target.value)}
-                    />
-                  </Field>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Payment Mode">
-                    <NativeSelect value={draft.mode} onChange={(e) => set("mode")(e.target.value)}>
-                      {Object.entries(MODES).map(([k, v]) => (
-                        <option key={k} value={k}>
-                          {v}
-                        </option>
-                      ))}
-                    </NativeSelect>
-                  </Field>
-                  <Field label="Paid To">
-                    <Input
-                      value={draft.paid_to}
-                      onChange={(e) => set("paid_to")(e.target.value)}
-                      placeholder="Payee / vendor"
-                    />
-                  </Field>
-                </div>
-
-                <Field label="Reference">
-                  <Input
-                    value={draft.reference}
-                    onChange={(e) => set("reference")(e.target.value)}
-                    placeholder="UTR / Challan / Bill no."
-                  />
-                </Field>
-
-                <Field label="Notes">
-                  <Textarea
-                    rows={2}
-                    value={draft.notes}
-                    onChange={(e) => set("notes")(e.target.value)}
-                    placeholder="Additional remarks…"
-                  />
-                </Field>
-
-                <Field label="Description (Optional)">
-                  <Input
-                    value={draft.description}
-                    onChange={(e) => set("description")(e.target.value)}
-                    placeholder="Enter description (optional)…"
-                  />
-                </Field>
-
-                <Button className="w-full font-medium" disabled={busy}>
-                  {busy ? "Saving…" : "Save Expense"}
+          {rows.length > 0 && (
+            <Card className="shadow-none border border-border/60">
+              <CardHeader className="py-3 px-4 border-b flex flex-row items-center justify-between">
+                <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Recent Expenses
+                </CardTitle>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 text-xs text-primary px-2"
+                  onClick={() => setView("history")}
+                >
+                  View all ({rows.length}) →
                 </Button>
-              </form>
-            </CardContent>
-          </Card>
-        )}
-
-        <div className={canCreate(MODULE) ? "lg:col-span-2" : "lg:col-span-3"}>
-          <DataTable
-            rows={rows}
-            loading={q.isLoading}
-            empty={
-              filter
-                ? `No ${KIND_LABEL[filter as ExpenseKind].toLowerCase()} recorded yet.`
-                : "No expenses recorded yet."
-            }
-            search={(e) =>
-              `${e.category} ${e.description} ${e.reference ?? ""} ${e.paid_to ?? ""} ${e.job_code ?? ""} ${e.client_name ?? ""}`
-            }
-            exportFilename="expenses"
-            exportTransform={(e) => ({
-              "Client": e.client_name ?? "Firm Overhead",
-              "Job Code": e.job_code ?? "",
-              "Date": fmtDate(e.expense_date),
-              "Kind": KIND_LABEL[e.kind],
-              "Category": e.category,
-              "Description": e.description,
-              "Paid To": e.paid_to ?? "",
-              "Mode": MODES[e.mode] ?? e.mode,
-              "Reference": e.reference ?? "",
-              "Amount": canSeeAmounts("expenses") && e.amount != null ? e.amount : "—",
-              "Notes": e.notes ?? "",
-            })}
-            columns={[
-              {
-                key: "client_name",
-                header: "Client / Job",
-                align: "left",
-                sort: (e) => e.client_name ?? "",
-                render: (e) => (
-                  <div className="flex flex-col min-w-[140px]">
-                    <span className="font-semibold text-sm text-foreground leading-tight">
-                      {e.client_name ?? (
-                        <span className="text-muted-foreground/80 font-normal italic">Firm Overhead</span>
-                      )}
-                    </span>
-                    {e.job_code ? (
-                      <span className="text-[11px] font-mono font-medium text-muted-foreground flex items-center gap-1 mt-0.5">
-                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary/70"></span>
-                        {e.job_code}
+              </CardHeader>
+              <CardContent className="p-0 divide-y divide-border/40 text-xs">
+                {rows.slice(0, 5).map((e) => (
+                  <div key={e.id} className="p-3 flex items-center justify-between">
+                    <div>
+                      <div className="font-medium text-foreground">{e.description || e.category}</div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {fmtDate(e.expense_date)} · {e.category} {e.paid_to && `· To: ${e.paid_to}`}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-mono font-semibold">
+                        {e.amount != null ? inr(e.amount) : "—"}
+                      </div>
+                      <span className="text-[10px] text-muted-foreground capitalize">
+                        {MODES[e.mode] ?? e.mode}
                       </span>
-                    ) : null}
-                  </div>
-                ),
-              },
-              {
-                key: "description",
-                header: "Description",
-                render: (e) => (
-                  <div className="flex flex-col max-w-[280px]">
-                    <span className="text-sm font-medium text-foreground leading-snug">{e.description}</span>
-                    <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground flex-wrap">
-                      {e.paid_to && (
-                        <span>
-                          Paid to: <strong className="font-medium text-foreground/80">{e.paid_to}</strong>
-                        </span>
-                      )}
-                      {e.reference && (
-                        <span className="font-mono text-[11px] bg-muted/60 px-1.5 py-0.5 rounded border border-border/40">
-                          Ref: {e.reference}
-                        </span>
-                      )}
                     </div>
                   </div>
-                ),
-              },
-              {
-                key: "kind",
-                header: "Kind",
-                render: (e) => (
-                  <span
-                    className={cn(
-                      "inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold whitespace-nowrap",
-                      KIND_IS_COST[e.kind]
-                        ? "bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20"
-                        : e.kind === "tax"
-                          ? "bg-sky-500/10 text-sky-700 dark:text-sky-400 border border-sky-500/20"
-                          : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20",
-                    )}
-                  >
-                    {KIND_LABEL[e.kind]}
-                  </span>
-                ),
-              },
-              {
-                key: "category",
-                header: "Category",
-                sort: (e) => e.category,
-                render: (e) => (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-muted text-muted-foreground border border-border/40 whitespace-nowrap">
-                    {e.category}
-                  </span>
-                ),
-              },
-              {
-                key: "expense_date",
-                header: "Date",
-                sort: (e) => e.expense_date,
-                render: (e) => (
-                  <span className="text-xs text-muted-foreground whitespace-nowrap font-medium">
-                    {fmtDate(e.expense_date)}
-                  </span>
-                ),
-              },
-              {
-                key: "mode",
-                header: "Mode",
-                render: (e) => (
-                  <span
-                    className={cn(
-                      "inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium capitalize whitespace-nowrap",
-                      e.mode === "bank"
-                        ? "bg-blue-500/10 text-blue-700 dark:text-blue-400 border border-blue-500/20"
-                        : e.mode === "cash"
-                          ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20"
-                          : "bg-purple-500/10 text-purple-700 dark:text-purple-400 border border-purple-500/20",
-                    )}
-                  >
-                    {MODES[e.mode] ?? e.mode}
-                  </span>
-                ),
-              },
-              {
-                key: "amount",
-                header: "Amount",
-                align: "right",
-                sort: (e) => Number(e.amount ?? 0),
-                render: (e) => (
-                  <span className="font-semibold text-sm tabular-nums text-foreground">
-                    {e.amount == null ? "—" : inr(e.amount)}
-                  </span>
-                ),
-              },
-              ...(canDelete(MODULE)
-                ? [
-                    {
-                      key: "x",
-                      header: "",
-                      render: (e: ExpenseRow) => (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                          title="Delete this expense"
-                          onClick={() =>
-                            setDel({ id: e.id, what: `${e.description} · ${inr(e.amount)}` })
-                          }
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      ),
-                    },
-                  ]
-                : []),
-            ]}
-          />
+                ))}
+              </CardContent>
+            </Card>
+          )}
         </div>
-      </div>
+      )}
+
+      {view === "history" && <div>{renderTable(false)}</div>}
 
       <ReasonDialog
         open={!!del}

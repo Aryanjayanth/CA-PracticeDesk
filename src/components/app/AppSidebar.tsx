@@ -5,6 +5,7 @@ import {
   Users,
   Briefcase,
   ClipboardList,
+  ListChecks,
   FileText,
   Repeat,
   ReceiptIndianRupee,
@@ -61,6 +62,7 @@ const groups: { label: string; items: Item[]; open?: boolean }[] = [
       { title: "Clients", url: "/clients", icon: Users, module: "clients" },
       { title: "Services", url: "/services", icon: Briefcase, module: "services" },
       { title: "Jobs", url: "/jobs", icon: ClipboardList, module: "jobs" },
+      { title: "Tasks", url: "/tasks", icon: ListChecks, module: "jobs" },
       { title: "Recurring Jobs", url: "/recurring", icon: Repeat, module: "recurring" },
       { title: "Expenses", url: "/expenses", icon: ReceiptIndianRupee, module: "expenses" },
     ],
@@ -69,10 +71,10 @@ const groups: { label: string; items: Item[]; open?: boolean }[] = [
     label: "Billing & Payments",
     open: true,
     items: [
-      { title: "Invoices", url: "/invoices", icon: FileText, roles: M },
       { title: "Payment Entry", url: "/payments", icon: Wallet, module: "payments" },
       { title: "Payment Clearing", url: "/clearing", icon: Shuffle, roles: M },
       { title: "Unallocated", url: "/unallocated", icon: CircleDollarSign, roles: M },
+      { title: "Invoices", url: "/invoices", icon: FileText, roles: M },
     ],
   },
   {

@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ArrowLeft, Check, Lock } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -18,6 +18,7 @@ import {
 } from "@/components/app/common";
 import { StatusBadge } from "@/components/app/StatusBadge";
 import { useRoles } from "@/hooks/use-roles";
+import { useCurrentFirm, useUserFirms } from "@/hooks/use-firm";
 import { errMsg, fmtDate, inr, today } from "@/lib/format";
 import { isWorkflow, type JobWorkflow } from "@/lib/job-workflow";
 
@@ -44,9 +45,12 @@ type Candidate = { job: JobWorkflow; jobCode: string; title: string; status: str
 
 function NewInvoicePage() {
   const { isFinance, loading } = useRoles();
+  const { data: currentFirm } = useCurrentFirm();
+  const { data: userFirms } = useUserFirms();
   const qc = useQueryClient();
   const navigate = useNavigate();
 
+  const [selectedFirmId, setSelectedFirmId] = useState(currentFirm?.id ?? "");
   const [sel, setSel] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [f, setF] = useState({
@@ -57,6 +61,12 @@ function NewInvoicePage() {
     extra_desc: "",
     extra_amount: "",
   });
+
+  useEffect(() => {
+    if (currentFirm?.id && !selectedFirmId) {
+      setSelectedFirmId(currentFirm.id);
+    }
+  }, [currentFirm?.id, selectedFirmId]);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) =>
     setF((p) => ({ ...p, [k]: e.target.value }));
 
@@ -141,7 +151,10 @@ function NewInvoicePage() {
     });
     setBusy(false);
     if (error) return toast.error(errMsg(error));
-    toast.success(`Invoice ${data ? "" : ""}created`);
+    if (data && selectedFirmId) {
+      await supabase.from("invoices").update({ firm_id: selectedFirmId }).eq("id", data);
+    }
+    toast.success("Invoice created successfully");
     qc.invalidateQueries();
     if (data) navigate({ to: "/invoices/$id", params: { id: data } });
   };
@@ -255,6 +268,22 @@ function NewInvoicePage() {
 
           <Section title="Invoice details">
             <div className="grid gap-3 sm:grid-cols-3">
+              <Field label="Billing Entity / Company *" className="sm:col-span-3">
+                <NativeSelect
+                  value={selectedFirmId}
+                  onChange={(e) => setSelectedFirmId(e.target.value)}
+                >
+                  {userFirms && userFirms.length > 0 ? (
+                    userFirms.map((firm) => (
+                      <option key={firm.id} value={firm.id}>
+                        {firm.name}
+                      </option>
+                    ))
+                  ) : (
+                    <option value={currentFirm?.id ?? ""}>{currentFirm?.name ?? "Default Firm"}</option>
+                  )}
+                </NativeSelect>
+              </Field>
               <Field label="Invoice date">
                 <Input type="date" value={f.invoice_date} onChange={set("invoice_date")} />
               </Field>

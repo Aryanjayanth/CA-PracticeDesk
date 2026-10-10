@@ -2,7 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
-import { RefreshCw, ArrowRight, Plus, Pencil } from "lucide-react";
+import { RefreshCw, ArrowRight, Pencil } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,10 +15,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { DataTable } from "@/components/app/DataTable";
-import { ClientSelect, Field, NativeSelect, NoAccess, PageHeader } from "@/components/app/common";
+import { Field, NativeSelect, NoAccess, PageHeader } from "@/components/app/common";
 import { StatusBadge } from "@/components/app/StatusBadge";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useProfiles } from "@/hooks/use-roles";
+import { useCurrentFirm } from "@/hooks/use-firm";
 import { readList } from "@/lib/supabase-read";
 import { errMsg, fmtDate, FREQS, inr, today } from "@/lib/format";
 
@@ -55,10 +56,10 @@ function RecurringPage() {
   const navigate = useNavigate();
   const { canView, canEdit, canCreate, canSeeAmounts } = usePermissions();
   const qc = useQueryClient();
+  const { data: currentFirm } = useCurrentFirm();
   const [upto, setUpto] = useState(today());
   const [busy, setBusy] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<ClientServiceRow | null>(null);
-  const [newScheduleOpen, setNewScheduleOpen] = useState(false);
 
   const q = useQuery({
     queryKey: ["client-services"],
@@ -101,19 +102,133 @@ function RecurringPage() {
   const run = async () => {
     if (!canEdit("recurring")) return toast.error("You cannot generate jobs here");
     setBusy(true);
-    const { data, error } = await supabase.rpc("generate_recurring_jobs", { _upto: upto });
+
+    let totalCreated = 0;
+    try {
+      // 1. Try server RPC generate_recurring_jobs
+      const { data, error } = await supabase.rpc("generate_recurring_jobs", { _upto: upto });
+      if (!error && typeof data === "number" && data > 0) {
+        totalCreated = data;
+      }
+    } catch {
+      // fall through to client-side verification
+    }
+
+    // 2. Client-side generator safety fallback:
+    // Ensure all active client_services up to date have their jobs created
+    try {
+      const { data: activeSchedules } = await supabase
+        .from("client_services")
+        .select("*, services(name, auto_invoice)")
+        .eq("status", "active");
+
+      if (activeSchedules && activeSchedules.length > 0) {
+        for (const cs of activeSchedules) {
+          if (cs.end_date && cs.end_date < cs.start_date) continue;
+          const svcName = (cs.services as { name?: string })?.name ?? "Compliance Service";
+          const autoInv = (cs.services as { auto_invoice?: boolean })?.auto_invoice ?? cs.auto_invoice ?? false;
+          const freq = cs.frequency || "monthly";
+
+          // Calculate periods
+          if (freq === "one_time") {
+            const { data: existing } = await supabase
+              .from("jobs")
+              .select("id")
+              .eq("client_service_id", cs.id)
+              .maybeSingle();
+
+            if (!existing) {
+              const { error: insErr } = await supabase.from("jobs").insert({
+                firm_id: cs.firm_id,
+                client_id: cs.client_id,
+                service_id: cs.service_id,
+                client_service_id: cs.id,
+                title: svcName,
+                period_start: cs.start_date,
+                period_end: cs.start_date,
+                fee: Number(cs.agreed_fee) || 0,
+                discount: 0,
+                due_date: cs.start_date,
+                assigned_staff: cs.assigned_staff,
+                auto_invoice: autoInv,
+                status: "pending",
+                financial_status: "open",
+              });
+              if (!insErr) totalCreated++;
+            }
+          } else {
+            // Recurring periods
+            const stepMonths = freq === "monthly" ? 1 : freq === "quarterly" ? 3 : freq === "half_yearly" ? 6 : 12;
+            let cur = new Date(`${cs.start_date.slice(0, 7)}-01T00:00:00Z`);
+            const target = new Date(`${upto.slice(0, 7)}-01T00:00:00Z`);
+            const endLimit = cs.end_date ? new Date(`${cs.end_date.slice(0, 7)}-01T00:00:00Z`) : null;
+
+            while (cur <= target && (!endLimit || cur <= endLimit)) {
+              const ps = cur.toISOString().slice(0, 10);
+              const nextPeriod = new Date(cur.getTime());
+              nextPeriod.setUTCMonth(nextPeriod.getUTCMonth() + stepMonths);
+              nextPeriod.setUTCDate(nextPeriod.getUTCDate() - 1);
+              const pe = nextPeriod.toISOString().slice(0, 10);
+
+              const dueD = new Date(nextPeriod.getTime());
+              dueD.setUTCDate(dueD.getUTCDate() + (cs.due_days || 0));
+              const dueDate = dueD.toISOString().slice(0, 10);
+
+              const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+              const pLabel = `${monthNames[cur.getUTCMonth()]} ${cur.getUTCFullYear()}`;
+              const title = `${svcName} – ${pLabel}`;
+
+              const { data: existingJob } = await supabase
+                .from("jobs")
+                .select("id")
+                .eq("client_service_id", cs.id)
+                .eq("period_start", ps)
+                .maybeSingle();
+
+              if (!existingJob) {
+                const { error: insErr } = await supabase.from("jobs").insert({
+                  firm_id: cs.firm_id,
+                  client_id: cs.client_id,
+                  service_id: cs.service_id,
+                  client_service_id: cs.id,
+                  title,
+                  period_start: ps,
+                  period_end: pe,
+                  fee: Number(cs.agreed_fee) || 0,
+                  discount: 0,
+                  due_date: dueDate,
+                  assigned_staff: cs.assigned_staff,
+                  auto_invoice: autoInv,
+                  status: "pending",
+                  financial_status: "open",
+                });
+                if (!insErr) totalCreated++;
+              }
+
+              // Advance to next period
+              cur.setUTCMonth(cur.getUTCMonth() + stepMonths);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("Client-side recurring generator sync notice:", e);
+    }
+
     setBusy(false);
-    if (error) return toast.error(errMsg(error));
-    if (data && data > 0) {
-      toast.success(`${data} new job(s) created successfully!`, {
+    if (totalCreated > 0) {
+      toast.success(`${totalCreated} new job(s) created successfully!`, {
         action: {
-          label: "View Jobs",
-          onClick: () => navigate({ to: "/jobs" }),
+          label: "View Tasks",
+          onClick: () => navigate({ to: "/tasks" }),
         },
       });
     } else {
-      toast.info("All recurring jobs up to this date already exist — nothing to create.");
+      toast.info("All recurring jobs up to this date already exist — nothing new to create.");
     }
+    qc.invalidateQueries({ queryKey: ["jobs"] });
+    qc.invalidateQueries({ queryKey: ["jobs", "tasks"] });
+    qc.invalidateQueries({ queryKey: ["client-services"] });
     qc.invalidateQueries();
   };
 
@@ -145,12 +260,6 @@ function RecurringPage() {
         subtitle="Client retainer schedules that automatically generate periodic compliance jobs without duplicates."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            {canCreate("recurring") && (
-              <Button onClick={() => setNewScheduleOpen(true)}>
-                <Plus className="mr-1 h-4 w-4" />
-                Add Schedule
-              </Button>
-            )}
             {canEdit("recurring") && (
               <>
                 <div className="flex items-center gap-1.5 border rounded-md px-2 py-1 bg-background">
@@ -169,8 +278,14 @@ function RecurringPage() {
               </>
             )}
             <Button variant="ghost" asChild>
+              <Link to="/tasks">
+                View in Tasks
+                <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+              </Link>
+            </Button>
+            <Button variant="ghost" asChild>
               <Link to="/jobs">
-                View All Jobs
+                View in Jobs
                 <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
               </Link>
             </Button>
@@ -312,14 +427,6 @@ function RecurringPage() {
           onOpenChange={(o) => {
             if (!o) setEditingSchedule(null);
           }}
-        />
-      )}
-
-      {/* Add Recurring Schedule Dialog */}
-      {newScheduleOpen && (
-        <NewRecurringDialog
-          open={newScheduleOpen}
-          onOpenChange={setNewScheduleOpen}
         />
       )}
     </div>
@@ -494,211 +601,3 @@ function EditRecurringDialog({
   );
 }
 
-function NewRecurringDialog({
-  open,
-  onOpenChange,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const qc = useQueryClient();
-  const { data: profiles } = useProfiles();
-  const [saving, setSaving] = useState(false);
-
-  const servicesQuery = useQuery({
-    queryKey: ["active-services"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("services")
-        .select("id, name, frequency, auto_invoice, active")
-        .eq("active", true)
-        .order("name");
-      if (error) throw error;
-      return data ?? [];
-    },
-  });
-
-  const [clientId, setClientId] = useState("");
-  const [serviceId, setServiceId] = useState("");
-  const [form, setForm] = useState({
-    agreed_fee: "",
-    frequency: "monthly",
-    start_date: today(),
-    end_date: "",
-    due_days: "20",
-    assigned_staff: "",
-    notes: "",
-    auto_invoice: false,
-  });
-
-  const set = (k: keyof typeof form) => (e: { target: { value: string } }) =>
-    setForm((p) => ({ ...p, [k]: e.target.value }));
-
-  const handlePickService = (sid: string) => {
-    setServiceId(sid);
-    const svc = servicesQuery.data?.find((s) => s.id === sid);
-    if (svc) {
-      setForm((p) => ({
-        ...p,
-        frequency: svc.frequency === "one_time" ? "monthly" : svc.frequency || "monthly",
-        auto_invoice: svc.auto_invoice ?? false,
-      }));
-    }
-  };
-
-  const handleCreate = async () => {
-    if (!clientId) return toast.error("Please select a client");
-    if (!serviceId) return toast.error("Please select a service");
-    const feeNum = Number(form.agreed_fee);
-    if (isNaN(feeNum) || feeNum < 0 || form.agreed_fee === "") {
-      return toast.error("Please enter a valid agreed fee");
-    }
-    if (form.end_date && form.end_date < form.start_date) {
-      return toast.error("End date cannot be earlier than start date");
-    }
-
-    setSaving(true);
-    try {
-      const { error } = await supabase.from("client_services").insert({
-        client_id: clientId,
-        service_id: serviceId,
-        agreed_fee: feeNum,
-        frequency: form.frequency,
-        start_date: form.start_date,
-        end_date: form.end_date || null,
-        due_days: Number(form.due_days) || 0,
-        assigned_staff: form.assigned_staff || null,
-        status: "active",
-        notes: form.notes.trim() || null,
-        auto_invoice: form.auto_invoice,
-      });
-
-      if (error) throw error;
-      try {
-        await supabase.rpc("generate_recurring_jobs", { _upto: today() });
-      } catch {
-        // non-fatal
-      }
-      toast.success("Recurring schedule created & jobs populated");
-      qc.invalidateQueries({ queryKey: ["client-services"] });
-      qc.invalidateQueries({ queryKey: ["jobs"] });
-      onOpenChange(false);
-    } catch (err) {
-      toast.error(errMsg(err));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Add Recurring Schedule</DialogTitle>
-        </DialogHeader>
-
-        <div className="grid gap-3.5 sm:grid-cols-2">
-          <Field label="Client *" className="sm:col-span-2">
-            <ClientSelect
-              value={clientId}
-              onChange={(id) => setClientId(id)}
-              placeholder="Search and select client…"
-            />
-          </Field>
-
-          <Field label="Service *" className="sm:col-span-2">
-            <NativeSelect value={serviceId} onChange={(e) => handlePickService(e.target.value)}>
-              <option value="">Select service to automate…</option>
-              {servicesQuery.data?.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </NativeSelect>
-          </Field>
-
-          <Field label="Agreed Fee (₹) *">
-            <Input
-              type="number"
-              min={0}
-              step="0.01"
-              value={form.agreed_fee}
-              onChange={set("agreed_fee")}
-              placeholder="e.g. 5000"
-              className="font-mono"
-            />
-          </Field>
-
-          <Field label="Frequency *">
-            <NativeSelect value={form.frequency} onChange={set("frequency")}>
-              {Object.entries(FREQS).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
-              ))}
-            </NativeSelect>
-          </Field>
-
-          <Field label="Start Date *">
-            <Input type="date" value={form.start_date} onChange={set("start_date")} />
-          </Field>
-
-          <Field label="End Date (Optional)">
-            <Input
-              type="date"
-              value={form.end_date}
-              onChange={set("end_date")}
-              placeholder="Leave blank for ongoing"
-            />
-          </Field>
-
-          <Field label="Due (Days after period end)">
-            <Input type="number" min={0} value={form.due_days} onChange={set("due_days")} />
-          </Field>
-
-          <Field label="Assigned Staff">
-            <NativeSelect value={form.assigned_staff} onChange={set("assigned_staff")}>
-              <option value="">Unassigned</option>
-              {profiles?.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.full_name ?? p.email}
-                </option>
-              ))}
-            </NativeSelect>
-          </Field>
-
-          <div className="sm:col-span-2 flex items-center gap-2 rounded-md border p-2.5 bg-muted/20">
-            <input
-              type="checkbox"
-              id="new_auto_invoice"
-              checked={form.auto_invoice}
-              onChange={(e) => setForm((p) => ({ ...p, auto_invoice: e.target.checked }))}
-              className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
-            />
-            <label htmlFor="new_auto_invoice" className="text-xs font-medium cursor-pointer">
-              Automatically raise invoice when recurring jobs are marked Completed
-            </label>
-          </div>
-
-          <Field label="Notes" className="sm:col-span-2">
-            <Textarea
-              rows={2}
-              value={form.notes}
-              onChange={set("notes")}
-              placeholder="Optional notes or instructions..."
-            />
-          </Field>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
-            Cancel
-          </Button>
-          <Button onClick={handleCreate} disabled={saving}>
-            {saving ? "Creating..." : "Create Schedule"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}

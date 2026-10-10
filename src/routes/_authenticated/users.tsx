@@ -121,9 +121,9 @@ function UsersPage() {
           ...ROLES.map((r) => ({
             key: r,
             header: label(r),
-            render: (u: { id: string; roles: Role[] }) => (
+            render: (u: any) => (
               <Checkbox
-                checked={u.roles.includes(r)}
+                checked={u.roles?.includes(r)}
                 onCheckedChange={(c) => toggle(u.id, r, !!c)}
               />
             ),
@@ -131,13 +131,13 @@ function UsersPage() {
           {
             key: "link",
             header: "Direct Link",
-            render: (u: { email: string }) => (
+            render: (u: any) => (
               <Button
                 size="sm"
                 variant="ghost"
                 className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
                 disabled={generatingFor === u.email || !u.email}
-                onClick={() => copyUserLink(u.email)}
+                onClick={() => u.email && copyUserLink(u.email)}
                 title="Copy direct login / password reset link"
               >
                 <Link2 className="h-3.5 w-3.5" />

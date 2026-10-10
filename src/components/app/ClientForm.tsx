@@ -45,7 +45,11 @@ const schema = z.object({
       /^$|^[0-9+\- ]{10,15}$/,
       "Please enter a valid phone number (e.g. 98765 43210), or leave it blank",
     ),
-  contact_person_name: z.string().trim().max(120, "Name is too long"),
+  contact_person_name: z
+    .string()
+    .trim()
+    .min(2, "Primary Concerned Person is required (minimum 2 characters)")
+    .max(120, "Name is too long"),
   contact_person_phone: z
     .string()
     .trim()
@@ -258,15 +262,15 @@ export function ClientForm({
           <Field
             label={
               <>
-                Primary Concerned Person{" "}
-                <span className="font-normal text-muted-foreground">(optional)</span>
+                Primary Concerned Person <Req />
               </>
             }
           >
             <Input
+              required
               value={f.contact_person_name}
               onChange={set("contact_person_name")}
-              placeholder="Enter name of primary contact/person"
+              placeholder="Enter name of primary contact person"
             />
           </Field>
         </div>

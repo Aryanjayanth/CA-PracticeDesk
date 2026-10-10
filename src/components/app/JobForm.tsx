@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -8,6 +8,7 @@ import {
   Building,
   Check,
   ChevronsUpDown,
+  RefreshCw,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -26,10 +27,12 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { ClientSelect, Field, FormScreen } from "./common";
+import { ClientSelect, Field, FormScreen, NativeSelect } from "./common";
 import { useClientLookup } from "@/hooks/use-roles";
-import { errMsg, inr, today } from "@/lib/format";
-import { normalizeServiceType } from "@/lib/service-options";
+import { useCurrentFirm, useUserFirms } from "@/hooks/use-firm";
+import { errMsg, FREQS, inr, today } from "@/lib/format";
+import { firstDuePreview, monthLabel, normalizeServiceType } from "@/lib/service-options";
+import { fetchFirmServices } from "@/lib/standard-services";
 import { cn } from "@/lib/utils";
 
 export interface JobServiceRow {
@@ -37,6 +40,8 @@ export interface JobServiceRow {
   service_name: string;
   service_type?: string;
   fee: string;
+  advance: string;
+  deductions: string;
 }
 
 interface JobFormProps {
@@ -48,29 +53,28 @@ interface JobFormProps {
 export function JobForm({ open, onOpenChange, initialClientId }: JobFormProps) {
   const qc = useQueryClient();
   const { data: clients } = useClientLookup();
+  const { data: currentFirm } = useCurrentFirm();
+  const { data: userFirms } = useUserFirms();
 
+  const [selectedFirmId, setSelectedFirmId] = useState(currentFirm?.id ?? "");
   const [clientId, setClientId] = useState(initialClientId ?? "");
   const [taskDate, setTaskDate] = useState(today());
   const [items, setItems] = useState<JobServiceRow[]>([]);
   const [servicesPopoverOpen, setServicesPopoverOpen] = useState(false);
-  const [advance, setAdvance] = useState("");
-  const [deductions, setDeductions] = useState("");
   const [autoInvoice, setAutoInvoice] = useState(false);
   const [generalNotes, setGeneralNotes] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // Fetch active services list
+  useEffect(() => {
+    if (currentFirm?.id && !selectedFirmId) {
+      setSelectedFirmId(currentFirm.id);
+    }
+  }, [currentFirm?.id, selectedFirmId]);
+
+  // Fetch active services list (with automatic standard fallback seeding)
   const servicesQuery = useQuery({
-    queryKey: ["active-services"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("services")
-        .select("id, name, service_type, auto_invoice, active")
-        .eq("active", true)
-        .order("name");
-      if (error) throw error;
-      return data ?? [];
-    },
+    queryKey: ["active-services", selectedFirmId, currentFirm?.id],
+    queryFn: () => fetchFirmServices(),
   });
 
   // Fetch client retainers/assignments to auto-populate fees if preconfigured
@@ -80,7 +84,7 @@ export function JobForm({ open, onOpenChange, initialClientId }: JobFormProps) {
       if (!clientId) return [];
       const { data, error } = await supabase
         .from("client_services")
-        .select("service_id, agreed_fee, assigned_staff")
+        .select("id, service_id, agreed_fee, frequency, due_days, assigned_staff, auto_invoice, status")
         .eq("client_id", clientId);
       if (error) throw error;
       return data ?? [];
@@ -139,6 +143,8 @@ export function JobForm({ open, onOpenChange, initialClientId }: JobFormProps) {
         service_name: svc.name,
         service_type: svc.service_type,
         fee: defaultFee,
+        advance: "",
+        deductions: "",
       };
 
       setItems((prev) => [...prev, newItem]);
@@ -163,6 +169,8 @@ export function JobForm({ open, onOpenChange, initialClientId }: JobFormProps) {
           service_name: svc.name,
           service_type: svc.service_type,
           fee: defaultFee,
+          advance: "",
+          deductions: "",
         });
       }
     }
@@ -173,9 +181,13 @@ export function JobForm({ open, onOpenChange, initialClientId }: JobFormProps) {
     setItems([]);
   };
 
-  const handleUpdateFee = (serviceId: string, fee: string) => {
+  const handleUpdateItem = (
+    serviceId: string,
+    field: "fee" | "advance" | "deductions",
+    val: string,
+  ) => {
     setItems((prev) =>
-      prev.map((item) => (item.service_id === serviceId ? { ...item, fee } : item)),
+      prev.map((item) => (item.service_id === serviceId ? { ...item, [field]: val } : item)),
     );
   };
 
@@ -183,14 +195,27 @@ export function JobForm({ open, onOpenChange, initialClientId }: JobFormProps) {
     setItems((prev) => prev.filter((item) => item.service_id !== serviceId));
   };
 
-  // Computations for summary
+  // Computations for summary (aggregated across all services)
   const subtotal = useMemo(
     () => items.reduce((sum, item) => sum + (Number(item.fee) || 0), 0),
     [items],
   );
-  const numAdvance = Number(advance) || 0;
-  const numDeductions = Number(deductions) || 0;
-  const totalOutstanding = Math.max(0, subtotal - numAdvance - numDeductions);
+  const totalAdvance = useMemo(
+    () => items.reduce((sum, item) => sum + (Number(item.advance) || 0), 0),
+    [items],
+  );
+  const totalDeductions = useMemo(
+    () => items.reduce((sum, item) => sum + (Number(item.deductions) || 0), 0),
+    [items],
+  );
+  const totalOutstanding = Math.max(0, subtotal - totalAdvance - totalDeductions);
+
+  const hasRecurringSelected = useMemo(() => {
+    return items.some((it) => {
+      const svc = availableServices.find((s) => s.id === it.service_id);
+      return svc?.billing_type === "recurring" || (svc?.frequency && svc.frequency !== "one_time");
+    });
+  }, [items, availableServices]);
 
   const handleSave = async () => {
     if (!clientId) {
@@ -209,80 +234,231 @@ export function JobForm({ open, onOpenChange, initialClientId }: JobFormProps) {
         toast.error(`Please enter a valid fee amount for "${item.service_name}"`);
         return;
       }
+      const advNum = Number(item.advance) || 0;
+      if (advNum < 0) {
+        toast.error(`Advance cannot be negative for "${item.service_name}"`);
+        return;
+      }
+      const dedNum = Number(item.deductions) || 0;
+      if (dedNum < 0) {
+        toast.error(`Deductions cannot be negative for "${item.service_name}"`);
+        return;
+      }
     }
 
     setSaving(true);
     try {
-      // 1. Group all selected services under ONE single Job Code as subtasks
       const defaultStaff = selectedClient?.assigned_staff || null;
-      const primaryService = items[0];
-      const primaryRetainer = clientServices.find((cs) => cs.service_id === primaryService.service_id);
+      const targetFirmId = selectedFirmId || currentFirm?.id || undefined;
 
-      // Create checklist sub-tasks for each service with its individual fee
-      const checklistItems = items.map((item) => ({
-        id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Math.random()),
-        label: item.service_name,
-        fee: Number(item.fee) || 0,
-        service_id: item.service_id,
-        done: false,
-      }));
+      // Prepare configs for each service item
+      const itemConfigs: {
+        item: JobServiceRow;
+        svc: any;
+        csId: string | null;
+        periodStart: string | null;
+        periodEnd: string | null;
+        dueDate: string | null;
+      }[] = [];
+      let hasRecurringServices = false;
 
-      // Combined descriptive title for multi-service job
-      const jobTitle = items.length === 1
-        ? items[0].service_name
-        : items.map((it) => it.service_name).join(" + ");
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const svc = availableServices.find((s) => s.id === item.service_id);
+        const isRecurring =
+          svc?.billing_type === "recurring" || (svc?.frequency && svc.frequency !== "one_time");
 
-      const jobToInsert = {
-        client_id: clientId,
-        service_id: primaryService.service_id,
-        title: jobTitle,
-        fee: subtotal,
-        discount: 0,
-        assigned_staff: primaryRetainer?.assigned_staff || defaultStaff,
-        checklist: checklistItems,
-        notes: generalNotes.trim() || null,
-        auto_invoice: autoInvoice,
-        due_date: null,
-        period_start: taskDate || null,
-        period_end: taskDate || null,
-        created_at: taskDate ? new Date(`${taskDate}T12:00:00Z`).toISOString() : new Date().toISOString(),
-        status: "pending",
-        financial_status: "open",
-      };
+        let csId: string | null = null;
+        let periodStart: string | null = taskDate || null;
+        let periodEnd: string | null = taskDate || null;
+        let dueDate: string | null = null;
 
-      const { data: createdJob, error: insertError } = await supabase
-        .from("jobs")
-        .insert([jobToInsert])
-        .select("id, fee, job_code")
-        .single();
+        if (isRecurring && svc) {
+          hasRecurringServices = true;
+          const freq = svc.frequency || "monthly";
+          const existingCs = clientServices.find((cs) => cs.service_id === item.service_id);
+          const dueDays = existingCs?.due_days ?? 20;
+          const preview = firstDuePreview(taskDate, freq, dueDays);
+          periodStart = preview?.periodStart ?? taskDate;
+          periodEnd = preview?.periodEnd ?? taskDate;
+          dueDate = preview?.dueDate ?? null;
 
-      if (insertError) throw insertError;
+          csId = existingCs?.id ?? null;
 
-      // 2. If advance or deductions are entered, record clearing against this single job
-      if ((numAdvance > 0 || numDeductions > 0) && createdJob) {
-        try {
-          await supabase.rpc("save_job_clearing", {
-            _job_id: createdJob.id,
-            _advance: numAdvance,
-            _tds_tcs: 0,
-            _discount: 0,
-            _other_deduction: numDeductions,
-            _other_addition: 0,
-            _notes: "Initial advance/deductions on job creation",
+          if (!csId) {
+            // Insert active retainer schedule
+            const { data: newCs, error: csErr } = await supabase
+              .from("client_services")
+              .insert({
+                firm_id: targetFirmId,
+                client_id: clientId,
+                service_id: item.service_id,
+                agreed_fee: Number(item.fee) || 0,
+                frequency: freq,
+                start_date: periodStart,
+                end_date: null,
+                due_days: dueDays,
+                assigned_staff: defaultStaff,
+                status: "active",
+                notes: generalNotes.trim() || null,
+                auto_invoice: autoInvoice,
+              })
+              .select("id")
+              .single();
+
+            if (csErr) {
+              console.warn("Could not auto-create retainer in client_services", csErr);
+            } else if (newCs) {
+              csId = newCs.id;
+            }
+          } else if (existingCs?.status !== "active") {
+            // Re-activate existing retainer if paused
+            await supabase
+              .from("client_services")
+              .update({ status: "active", agreed_fee: Number(item.fee) || 0 })
+              .eq("id", csId);
+          }
+        } else {
+          dueDate = taskDate;
+        }
+
+        itemConfigs.push({
+          item,
+          svc,
+          csId,
+          periodStart,
+          periodEnd,
+          dueDate,
+        });
+      }
+
+      // Create 1 job per service ("1 service go to one job")
+      const createdJobs: { id: string; fee: number; job_code: string; title: string }[] = [];
+
+      for (const config of itemConfigs) {
+        const { item, svc, csId, periodStart, periodEnd, dueDate } = config;
+        const fee = Number(item.fee) || 0;
+        const adv = Number(item.advance) || 0;
+        const ded = Number(item.deductions) || 0;
+
+        let jobTitle = item.service_name;
+        if (
+          periodStart &&
+          (svc?.billing_type === "recurring" || (svc?.frequency && svc.frequency !== "one_time"))
+        ) {
+          const periodStr = monthLabel(periodStart);
+          if (!jobTitle.includes(periodStr)) {
+            jobTitle = `${jobTitle} – ${periodStr}`;
+          }
+        }
+
+        const jobToInsert = {
+          firm_id: targetFirmId,
+          client_id: clientId,
+          service_id: item.service_id,
+          client_service_id: csId,
+          title: jobTitle,
+          fee: fee,
+          discount: 0,
+          assigned_staff: defaultStaff,
+          checklist: [],
+          notes: generalNotes.trim() || null,
+          auto_invoice: autoInvoice,
+          due_date: dueDate || null,
+          period_start: periodStart || null,
+          period_end: periodEnd || null,
+          created_at: taskDate ? new Date(`${taskDate}T12:00:00Z`).toISOString() : new Date().toISOString(),
+          status: "pending",
+          financial_status: "open",
+        };
+
+        // Check for existing recurring job to avoid duplicate constraint error
+        let currentJob: { id: string; fee: number; job_code: string } | null = null;
+        if (csId && periodStart) {
+          const { data: existingJob } = await supabase
+            .from("jobs")
+            .select("id, fee, job_code")
+            .eq("client_service_id", csId)
+            .eq("period_start", periodStart)
+            .maybeSingle();
+
+          if (existingJob) {
+            const { data: updatedJob, error: updateErr } = await supabase
+              .from("jobs")
+              .update({
+                fee,
+                notes: generalNotes.trim() || null,
+                due_date: dueDate || null,
+                auto_invoice: autoInvoice,
+              })
+              .eq("id", existingJob.id)
+              .select("id, fee, job_code")
+              .single();
+
+            if (updateErr) throw updateErr;
+            currentJob = updatedJob ?? existingJob;
+          }
+        }
+
+        if (!currentJob) {
+          const { data: inserted, error: insertError } = await supabase
+            .from("jobs")
+            .insert([jobToInsert])
+            .select("id, fee, job_code")
+            .single();
+
+          if (insertError) throw insertError;
+          currentJob = inserted;
+        }
+
+        // Save clearing record for this individual job if advance or deductions entered
+        if (currentJob && (adv > 0 || ded > 0)) {
+          try {
+            await supabase.rpc("save_job_clearing", {
+              _job_id: currentJob.id,
+              _advance: adv,
+              _tds_tcs: 0,
+              _discount: 0,
+              _other_deduction: ded,
+              _other_addition: 0,
+              _notes: "Initial advance/deductions on job creation",
+            });
+          } catch (clearingErr) {
+            console.warn("Could not save initial clearing for job", currentJob.id, clearingErr);
+          }
+        }
+
+        if (currentJob) {
+          createdJobs.push({
+            id: currentJob.id,
+            fee: currentJob.fee,
+            job_code: currentJob.job_code,
+            title: jobTitle,
           });
-        } catch (clearingErr) {
-          console.warn("Could not save initial clearing for job", createdJob.id, clearingErr);
+        }
+      }
+
+      // If recurring services were involved, trigger background generation of recurring jobs
+      if (hasRecurringServices) {
+        try {
+          await supabase.rpc("generate_recurring_jobs", { _upto: today() });
+        } catch (rpcErr) {
+          console.warn("generate_recurring_jobs notice:", rpcErr);
         }
       }
 
       toast.success(
-        items.length === 1
-          ? `Job ${createdJob?.job_code ?? ""} created successfully`
-          : `Job ${createdJob?.job_code ?? ""} created with ${items.length} sub-tasks`,
+        createdJobs.length === 1
+          ? `Job ${createdJobs[0]?.job_code ?? ""} created successfully`
+          : `Created ${createdJobs.length} jobs successfully (${createdJobs.map((j) => j.job_code).join(", ")})`,
       );
       qc.invalidateQueries({ queryKey: ["jobs"] });
+      qc.invalidateQueries({ queryKey: ["jobs", "tasks"] });
       qc.invalidateQueries({ queryKey: ["job-lookup"] });
       qc.invalidateQueries({ queryKey: ["client_jobs_list"] });
+      qc.invalidateQueries({ queryKey: ["client-services"] });
+      qc.invalidateQueries({ queryKey: ["client360"] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
       onOpenChange(false);
     } catch (err) {
       toast.error(errMsg(err));
@@ -325,19 +501,38 @@ export function JobForm({ open, onOpenChange, initialClientId }: JobFormProps) {
         {/* Top: Client Selection & Task Date Card */}
         <section className="rounded-xl border bg-card p-5 space-y-4">
           <div className="grid gap-4 sm:grid-cols-3">
-            <div className="sm:col-span-2 space-y-1.5">
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground block">
+                Billing Firm / Company *
+              </label>
+              <NativeSelect
+                value={selectedFirmId}
+                onChange={(e) => setSelectedFirmId(e.target.value)}
+              >
+                {userFirms && userFirms.length > 0 ? (
+                  userFirms.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))
+                ) : (
+                  <option value={currentFirm?.id ?? ""}>{currentFirm?.name ?? "Default Firm"}</option>
+                )}
+              </NativeSelect>
+            </div>
+            <div className="space-y-1.5">
               <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground block">
                 Client *
               </label>
               <ClientSelect
                 value={clientId}
                 onChange={(id) => setClientId(id)}
-                placeholder="Search and select client by name or client code…"
+                placeholder="Search and select client by name or code…"
               />
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground block">
-                Date of Creation of Task *
+                Date of Creation *
               </label>
               <Input
                 type="date"
@@ -418,7 +613,25 @@ export function JobForm({ open, onOpenChange, initialClientId }: JobFormProps) {
                 <Command>
                   <CommandInput placeholder="Search services..." className="h-9 text-xs" />
                   <CommandList className="max-h-72">
-                    <CommandEmpty>No services found.</CommandEmpty>
+                    <CommandEmpty>
+                      <div className="py-2 text-center space-y-2">
+                        <p>{servicesQuery.isLoading ? "Loading services…" : "No services found."}</p>
+                        {!servicesQuery.isLoading && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="text-xs h-7"
+                            onClick={async () => {
+                              await fetchFirmServices();
+                              qc.invalidateQueries({ queryKey: ["active-services"] });
+                            }}
+                          >
+                            Load Standard CA Services
+                          </Button>
+                        )}
+                      </div>
+                    </CommandEmpty>
                     <div className="flex items-center justify-between border-b px-3 py-1.5 text-[11px] bg-muted/40">
                       <button
                         type="button"
@@ -496,6 +709,17 @@ export function JobForm({ open, onOpenChange, initialClientId }: JobFormProps) {
             </div>
           </div>
 
+          {/* Recurring Compliance Notice */}
+          {hasRecurringSelected && (
+            <div className="flex items-start gap-2.5 rounded-lg border border-sky-500/30 bg-sky-500/5 p-3 text-xs text-muted-foreground">
+              <RefreshCw className="h-4 w-4 text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-semibold text-foreground">Recurring Compliance Work:</span>{" "}
+                Creating this job will automatically register the client retainer schedule and generate recurring cycle jobs without duplicates.
+              </div>
+            </div>
+          )}
+
           {/* Unified SERVICE | AMT Table Grid */}
           {items.length === 0 ? (
             <div className="rounded-xl border border-dashed p-8 text-center bg-muted/10">
@@ -512,132 +736,203 @@ export function JobForm({ open, onOpenChange, initialClientId }: JobFormProps) {
                   <thead>
                     <tr className="border-b bg-muted/60 font-semibold uppercase tracking-wider text-muted-foreground">
                       <th className="py-2.5 px-3 w-10 text-center">#</th>
-                      <th className="py-2.5 px-4">Service</th>
-                      <th className="py-2.5 px-4 w-48 text-right">Amount (₹) *</th>
+                      <th className="py-2.5 px-4 min-w-[200px]">Service</th>
+                      <th className="py-2.5 px-3 w-36 text-right">Amount (₹) *</th>
+                      <th className="py-2.5 px-3 w-36 text-right">Advance (₹)</th>
+                      <th className="py-2.5 px-3 w-36 text-right">Deductions / TDS (₹)</th>
+                      <th className="py-2.5 px-3 w-28 text-right">Net Due (₹)</th>
                       <th className="py-2.5 px-3 w-10 text-center"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {items.map((item, idx) => (
-                      <tr
-                        key={item.service_id}
-                        className="hover:bg-muted/20 transition-colors group"
-                      >
-                        <td className="py-2.5 px-3 text-center font-mono text-muted-foreground">
-                          {idx + 1}
-                        </td>
+                    {items.map((item, idx) => {
+                      const feeNum = Number(item.fee) || 0;
+                      const advNum = Number(item.advance) || 0;
+                      const dedNum = Number(item.deductions) || 0;
+                      const rowNet = Math.max(0, feeNum - advNum - dedNum);
 
-                        <td className="py-2.5 px-4">
-                          <div className="font-semibold text-foreground text-sm">
-                            {item.service_name}
-                          </div>
-                          {item.service_type && (
-                            <span className="inline-block rounded bg-muted px-1.5 py-0.2 text-[10px] text-muted-foreground font-medium mt-0.5">
-                              {item.service_type}
-                            </span>
-                          )}
-                        </td>
+                      return (
+                        <tr
+                          key={item.service_id}
+                          className="hover:bg-muted/20 transition-colors group"
+                        >
+                          <td className="py-2.5 px-3 text-center font-mono text-muted-foreground">
+                            {idx + 1}
+                          </td>
 
-                        <td className="py-2.5 px-4">
-                          <div className="relative ml-auto max-w-[180px]">
-                            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-2.5 text-muted-foreground text-xs font-semibold">
-                              ₹
+                          <td className="py-2.5 px-4">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-semibold text-foreground text-sm">
+                                {item.service_name}
+                              </span>
+                              {(() => {
+                                const svc = availableServices.find((s) => s.id === item.service_id);
+                                const isRec =
+                                  svc?.billing_type === "recurring" ||
+                                  (svc?.frequency && svc.frequency !== "one_time");
+                                if (!isRec) return null;
+                                return (
+                                  <span className="inline-flex items-center gap-1 rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-600 dark:text-sky-400">
+                                    <RefreshCw className="h-2.5 w-2.5" />
+                                    Recurring ({svc?.frequency ? FREQS[svc.frequency] || svc.frequency : "Monthly"})
+                                  </span>
+                                );
+                              })()}
                             </div>
-                            <Input
-                              type="number"
-                              min={0}
-                              step="0.01"
-                              value={item.fee}
-                              onChange={(e) =>
-                                handleUpdateFee(item.service_id, e.target.value)
-                              }
-                              placeholder="0.00"
-                              className="h-8 pl-6 text-right font-mono font-semibold text-sm bg-background"
-                            />
-                          </div>
-                        </td>
+                            {item.service_type && (
+                              <span className="inline-block rounded bg-muted px-1.5 py-0.2 text-[10px] text-muted-foreground font-medium mt-0.5">
+                                {item.service_type}
+                              </span>
+                            )}
+                          </td>
 
-                        <td className="py-2.5 px-3 text-center">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleRemoveItem(item.service_id)}
-                            className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                            title="Remove service"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
+                          {/* Amount (₹) */}
+                          <td className="py-2.5 px-3">
+                            <div className="relative">
+                              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-2 text-muted-foreground text-xs font-semibold">
+                                ₹
+                              </div>
+                              <Input
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                value={item.fee}
+                                onChange={(e) =>
+                                  handleUpdateItem(item.service_id, "fee", e.target.value)
+                                }
+                                placeholder="0.00"
+                                className="h-8 pl-5 text-right font-mono font-semibold text-xs bg-background"
+                              />
+                            </div>
+                          </td>
+
+                          {/* Advance (₹) */}
+                          <td className="py-2.5 px-3">
+                            <div className="relative">
+                              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-2 text-muted-foreground text-xs font-semibold">
+                                ₹
+                              </div>
+                              <Input
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                value={item.advance}
+                                onChange={(e) =>
+                                  handleUpdateItem(item.service_id, "advance", e.target.value)
+                                }
+                                placeholder="0.00"
+                                className="h-8 pl-5 text-right font-mono text-xs bg-background"
+                              />
+                            </div>
+                          </td>
+
+                          {/* Deductions / TDS (₹) */}
+                          <td className="py-2.5 px-3">
+                            <div className="relative">
+                              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-2 text-muted-foreground text-xs font-semibold">
+                                ₹
+                              </div>
+                              <Input
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                value={item.deductions}
+                                onChange={(e) =>
+                                  handleUpdateItem(item.service_id, "deductions", e.target.value)
+                                }
+                                placeholder="0.00"
+                                className="h-8 pl-5 text-right font-mono text-xs bg-background"
+                              />
+                            </div>
+                          </td>
+
+                          {/* Net Due (₹) */}
+                          <td className="py-2.5 px-3 text-right font-mono font-bold text-foreground text-xs whitespace-nowrap">
+                            {inr(rowNet)}
+                          </td>
+
+                          {/* Remove action */}
+                          <td className="py-2.5 px-3 text-center">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleRemoveItem(item.service_id)}
+                              className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                              title="Remove service"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
 
-              {/* Subtotal Strip inside Table Box */}
-              <div className="bg-muted/40 px-4 py-2.5 border-t flex items-center justify-between text-xs">
+              {/* Subtotal & Financial Breakdown Strip */}
+              <div className="bg-muted/40 px-4 py-2.5 border-t flex flex-wrap items-center justify-between gap-3 text-xs">
                 <span className="font-medium text-muted-foreground">
-                  Total Services ({items.length})
+                  Total Services: <strong className="text-foreground">{items.length}</strong>
                 </span>
-                <div className="flex items-center gap-2 font-mono text-sm font-bold text-foreground">
-                  <span>Subtotal:</span>
-                  <span>{inr(subtotal)}</span>
+                <div className="flex flex-wrap items-center gap-4 font-mono text-xs">
+                  <div>
+                    <span className="text-muted-foreground">Subtotal: </span>
+                    <span className="font-semibold">{inr(subtotal)}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Advances: </span>
+                    <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                      − {inr(totalAdvance)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Deductions: </span>
+                    <span className="font-semibold text-amber-600 dark:text-amber-400">
+                      − {inr(totalDeductions)}
+                    </span>
+                  </div>
+                  <div className="text-sm font-bold text-foreground pl-2 border-l">
+                    <span>Net Balance: </span>
+                    <span className="text-primary">{inr(totalOutstanding)}</span>
+                  </div>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Integrated Financial Calculations (Advances, Deductions & Outstanding) */}
-          <div className="rounded-xl border bg-muted/20 p-4 space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Advances Received (₹)">
-                <div className="relative">
-                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-muted-foreground text-xs font-semibold">
-                    ₹
-                  </div>
-                  <Input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={advance}
-                    onChange={(e) => setAdvance(e.target.value)}
-                    placeholder="0.00"
-                    className="pl-7 font-mono bg-background"
-                  />
-                </div>
-              </Field>
-
-              <Field label="Deductions / TDS (₹)">
-                <div className="relative">
-                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-muted-foreground text-xs font-semibold">
-                    ₹
-                  </div>
-                  <Input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={deductions}
-                    onChange={(e) => setDeductions(e.target.value)}
-                    placeholder="0.00"
-                    className="pl-7 font-mono bg-background"
-                  />
-                </div>
-              </Field>
+          {/* Integrated Financial Summary Breakdown Cards */}
+          <div className="rounded-xl border bg-muted/20 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Financial Summary Breakdown
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                Aggregated from {items.length} service{items.length === 1 ? "" : "s"} above
+              </span>
             </div>
 
-            {/* Live Outstanding Calculation Banner */}
-            <div className="rounded-lg border bg-background p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
-              <div>
-                <div className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">
-                  Total Outstanding Amount
-                </div>
-                <div className="text-[11px] text-muted-foreground mt-0.5">
-                  Subtotal ({inr(subtotal)}) − Advance ({inr(numAdvance)}) − Deductions ({inr(numDeductions)})
+            <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
+              <div className="rounded-lg border bg-background p-3">
+                <div className="text-[11px] font-medium text-muted-foreground">Gross Fee Amount</div>
+                <div className="text-base font-bold font-mono text-foreground mt-0.5">{inr(subtotal)}</div>
+              </div>
+              <div className="rounded-lg border bg-background p-3">
+                <div className="text-[11px] font-medium text-muted-foreground">Total Advances</div>
+                <div className="text-base font-bold font-mono text-emerald-600 dark:text-emerald-400 mt-0.5">
+                  {totalAdvance > 0 ? `− ${inr(totalAdvance)}` : inr(0)}
                 </div>
               </div>
-              <div className="text-xl font-bold font-mono text-primary tabular-nums">
-                {inr(totalOutstanding)}
+              <div className="rounded-lg border bg-background p-3">
+                <div className="text-[11px] font-medium text-muted-foreground">Total Deductions / TDS</div>
+                <div className="text-base font-bold font-mono text-amber-600 dark:text-amber-400 mt-0.5">
+                  {totalDeductions > 0 ? `− ${inr(totalDeductions)}` : inr(0)}
+                </div>
+              </div>
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+                <div className="text-[11px] font-semibold text-primary">Total Outstanding Amount</div>
+                <div className="text-lg font-bold font-mono text-primary mt-0.5">{inr(totalOutstanding)}</div>
               </div>
             </div>
           </div>

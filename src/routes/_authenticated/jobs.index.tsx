@@ -1,11 +1,17 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Plus, CheckCircle2, Check, ArrowRight } from "lucide-react";
+import { Plus, CheckCircle2, ArrowRight, Download, Check, Clock, PauseCircle, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { DataTable } from "@/components/app/DataTable";
 import { ClientSelect, NativeSelect, PageHeader } from "@/components/app/common";
 import { StatusBadge } from "@/components/app/StatusBadge";
@@ -13,7 +19,7 @@ import { useProfiles } from "@/hooks/use-roles";
 import { usePermissions } from "@/hooks/use-permissions";
 import { JobForm } from "@/components/app/JobForm";
 import { readList } from "@/lib/supabase-read";
-import { errMsg, fmtDate, inr, JOB_STATUSES, jobDisplayStatus, label } from "@/lib/format";
+import { downloadCsv, errMsg, fmtDate, inr, JOB_STATUSES, jobDisplayStatus, label } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/jobs/")({
@@ -41,6 +47,36 @@ function JobsPage() {
     to: "",
   });
 
+  const handleBulkStatus = async (
+    selectedJobs: any[],
+    newStatus: string,
+    clearSelection: () => void,
+  ) => {
+    if (!canEdit("jobs")) {
+      toast.error("You are not authorised to update job status");
+      return;
+    }
+    const toastId = toast.loading(`Updating ${selectedJobs.length} jobs to ${label(newStatus)}…`);
+    try {
+      let count = 0;
+      for (const j of selectedJobs) {
+        const { error } = await supabase.rpc("update_job_status", {
+          _job_id: j.id,
+          _status: newStatus,
+          _reason: `Status changed to ${newStatus} via bulk action`,
+        });
+        if (!error) count++;
+      }
+      toast.dismiss(toastId);
+      toast.success(`Successfully updated ${count} job(s) to ${label(newStatus)}`);
+      clearSelection();
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+    } catch (err) {
+      toast.dismiss(toastId);
+      toast.error(errMsg(err));
+    }
+  };
+
   const handleQuickComplete = async (e: React.MouseEvent, j: { id: string; job_code: string; status: string }) => {
     e.stopPropagation();
     if (!canEdit("jobs")) {
@@ -52,7 +88,7 @@ function JobsPage() {
       const { error } = await supabase.rpc("update_job_status", {
         _job_id: j.id,
         _status: newStatus,
-        _reason: `Status changed to ${newStatus} via Jobs list quick checkbox`,
+        _reason: `Status changed to ${newStatus} via quick action`,
       });
       if (error) throw error;
       qc.invalidateQueries({ queryKey: ["jobs"] });
@@ -67,9 +103,8 @@ function JobsPage() {
       toast.error(errMsg(err));
     }
   };
-  // Read through the RPC rather than the table: it blanks fee/discount/net_amount
-  // server-side unless this user holds the jobs "amounts" grant, so a Staff
-  // member who can work jobs without seeing fees never receives the figures.
+
+  // Read through the RPC rather than the table
   const q = useQuery({
     queryKey: ["jobs"],
     queryFn: () =>
@@ -81,8 +116,6 @@ function JobsPage() {
           )
           .order("created_at", { ascending: false });
         if (error) return { data: null, error };
-        // Flatten the nested joins into the same shape jobs_list returns, so the
-        // table columns do not have to care which path produced the row.
         return {
           data: (data ?? []).map((j) => {
             const inv = (
@@ -130,17 +163,98 @@ function JobsPage() {
         title="Jobs"
         subtitle="All compliance and engagement work"
         actions={
-          canCreate("jobs") && (
-            <Button onClick={() => setOpen(true)}>
-              <Plus className="mr-1 h-4 w-4" />
-              Create Job
+          <div className="flex items-center gap-2">
+            <Button variant="outline" asChild>
+              <Link to="/tasks">
+                View Tasks &amp; Subtasks
+                <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+              </Link>
             </Button>
-          )
+            {canCreate("jobs") && (
+              <Button onClick={() => setOpen(true)}>
+                <Plus className="mr-1 h-4 w-4" />
+                Create Job
+              </Button>
+            )}
+          </div>
         }
       />
       <DataTable
         rows={rows}
         loading={q.isLoading}
+        selectable
+        bulkActions={(selectedJobs, clearSelection) => (
+          <div className="flex items-center gap-2">
+            {canEdit("jobs") && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="sm" variant="default" className="h-8 text-xs font-medium">
+                    Mark as…
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    onClick={() => handleBulkStatus(selectedJobs, "completed", clearSelection)}
+                    className="cursor-pointer gap-2"
+                  >
+                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                    <span>Completed</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => handleBulkStatus(selectedJobs, "in_progress", clearSelection)}
+                    className="cursor-pointer gap-2"
+                  >
+                    <Clock className="h-3.5 w-3.5 text-blue-600" />
+                    <span>In Progress</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => handleBulkStatus(selectedJobs, "on_hold", clearSelection)}
+                    className="cursor-pointer gap-2"
+                  >
+                    <PauseCircle className="h-3.5 w-3.5 text-amber-600" />
+                    <span>On Hold</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => handleBulkStatus(selectedJobs, "cancelled", clearSelection)}
+                    className="cursor-pointer gap-2 text-destructive"
+                  >
+                    <XCircle className="h-3.5 w-3.5" />
+                    <span>Cancelled</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs gap-1.5 font-medium bg-background"
+              onClick={() => {
+                const dataToExport = selectedJobs.map((j) => ({
+                  "Job Code": j.job_code,
+                  "Title": j.title,
+                  "Client": j.client_name ?? "",
+                  "Service": j.service_name ?? "",
+                  "Status": label(jobDisplayStatus(j)),
+                  "Period Start": fmtDate(j.period_start),
+                  "Period End": fmtDate(j.period_end),
+                  "Created Date": fmtDate(j.created_at),
+                  "Due Date": fmtDate(j.due_date),
+                  "Fee": canSeeAmounts("jobs") && j.fee != null ? j.fee : "—",
+                  "Net Amount": canSeeAmounts("jobs") && j.net_amount != null ? j.net_amount : "—",
+                  "Assigned Staff": j.assigned_staff_name ?? "",
+                  "Auto-Invoice": j.auto_invoice ? "Yes" : "No",
+                }));
+                const stamp = new Date().toISOString().slice(0, 10);
+                downloadCsv(`jobs_selected_${stamp}.csv`, dataToExport);
+              }}
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export Selected ({selectedJobs.length})
+            </Button>
+          </div>
+        )}
         onRowClick={(j) => navigate({ to: "/jobs/$id", params: { id: j.id } })}
         empty="No jobs match these filters."
         search={(j) => `${j.job_code} ${j.title} ${j.client_name ?? ""}`}
@@ -200,34 +314,8 @@ function JobsPage() {
         }
         columns={[
           {
-            key: "done_action",
-            header: "Done",
-            render: (j) => {
-              const isDone = j.status === "completed";
-              return (
-                <button
-                  type="button"
-                  onClick={(e) => handleQuickComplete(e, j)}
-                  className={cn(
-                    "inline-flex h-7 w-7 items-center justify-center rounded-md border transition-all",
-                    isDone
-                      ? "border-emerald-500 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
-                      : "border-muted-foreground/30 bg-background text-muted-foreground hover:border-primary hover:text-primary hover:bg-primary/5",
-                  )}
-                  title={
-                    isDone
-                      ? "Job Completed — Click to reopen as In Progress"
-                      : "Click to mark Job as Completed"
-                  }
-                >
-                  {isDone ? <CheckCircle2 className="h-4 w-4" /> : <Check className="h-3.5 w-3.5 opacity-60 hover:opacity-100" />}
-                </button>
-              );
-            },
-          },
-          {
             key: "job_code",
-            header: "Job",
+            header: "Job Code",
             sort: (j) => j.job_code,
             render: (j) => (
               <span className="font-mono text-xs font-semibold text-primary">
@@ -237,21 +325,28 @@ function JobsPage() {
           },
           {
             key: "title",
-            header: "Title",
+            header: "Title / Service",
             sort: (j) => j.title,
             render: (j) => {
               const isDone = j.status === "completed";
               return (
-                <span
-                  className={cn(
-                    "font-medium transition-all",
-                    isDone
-                      ? "line-through text-muted-foreground opacity-60"
-                      : "text-foreground",
+                <div className="flex items-center gap-2">
+                  <span
+                    className={cn(
+                      "font-medium transition-all",
+                      isDone
+                        ? "line-through text-muted-foreground opacity-60"
+                        : "text-foreground",
+                    )}
+                  >
+                    {j.title}
+                  </span>
+                  {isDone && (
+                    <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                      <Check className="h-3 w-3" /> Done
+                    </span>
                   )}
-                >
-                  {j.title}
-                </span>
+                </div>
               );
             },
           },

@@ -2,12 +2,13 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Printer, XCircle } from "lucide-react";
+import { Building2, Printer, XCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { NoAccess, ReasonDialog } from "@/components/app/common";
 import { StatusBadge } from "@/components/app/StatusBadge";
 import { useRoles } from "@/hooks/use-roles";
+import { useUserFirms } from "@/hooks/use-firm";
 import { errMsg, fmtDate, inr, invoiceDisplayStatus, MODES } from "@/lib/format";
 
 export const Route = createFileRoute("/_authenticated/invoices/$id")({
@@ -66,14 +67,21 @@ function words(n: number): string {
 function InvoiceView() {
   const { id } = Route.useParams();
   const { isFinance, loading } = useRoles();
+  const { data: userFirms } = useUserFirms();
   const qc = useQueryClient();
   const [cancel, setCancel] = useState(false);
+  const [selectedFirmId, setSelectedFirmId] = useState<string>("");
+
   const q = useQuery({
     queryKey: ["invoice", id],
     enabled: isFinance,
     queryFn: async () => {
-      const [i, items, al, disc, s] = await Promise.all([
-        supabase.from("invoices").select("*, clients(*)").eq("id", id).maybeSingle(),
+      const iRes = await supabase.from("invoices").select("*, clients(*)").eq("id", id).maybeSingle();
+      if (iRes.error) throw iRes.error;
+      const invData = iRes.data;
+      if (!invData) return { inv: null, items: [], allocs: [], discounts: [], settings: null, firm: null };
+
+      const [items, al, disc, s, f] = await Promise.all([
         supabase.from("invoice_items").select("*, jobs(job_code)").eq("invoice_id", id),
         supabase
           .from("payment_allocations")
@@ -81,18 +89,43 @@ function InvoiceView() {
           .eq("invoice_id", id)
           .order("created_at"),
         supabase.from("discounts").select("*").eq("invoice_id", id),
-        supabase.from("settings").select("*").maybeSingle(),
+        invData.firm_id
+          ? supabase.from("settings").select("*").eq("firm_id", invData.firm_id).maybeSingle()
+          : supabase.from("settings").select("*").maybeSingle(),
+        invData.firm_id
+          ? supabase.from("firms").select("*").eq("id", invData.firm_id).maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
       ]);
-      if (i.error) throw i.error;
+
       return {
-        inv: i.data,
+        inv: invData,
         items: items.data ?? [],
         allocs: al.data ?? [],
         discounts: disc.data ?? [],
         settings: s.data,
+        firm: f.data,
       };
     },
   });
+
+  const effectiveFirmId = selectedFirmId || q.data?.inv?.firm_id;
+
+  const firmDetailsQuery = useQuery({
+    queryKey: ["invoice-firm-details", effectiveFirmId],
+    enabled: Boolean(effectiveFirmId),
+    queryFn: async () => {
+      if (!effectiveFirmId) return null;
+      const [sRes, fRes] = await Promise.all([
+        supabase.from("settings").select("*").eq("firm_id", effectiveFirmId).maybeSingle(),
+        supabase.from("firms").select("*").eq("id", effectiveFirmId).maybeSingle(),
+      ]);
+      return {
+        settings: sRes.data,
+        firm: fRes.data,
+      };
+    },
+  });
+
   if (loading) return null;
   if (!isFinance) return <NoAccess />;
   if (q.isLoading) return <div className="text-muted-foreground">Loading…</div>;
@@ -103,7 +136,9 @@ function InvoiceView() {
         Invoice not found.
       </div>
     );
-  const { inv, settings } = d;
+  const { inv } = d;
+  const activeFirm = firmDetailsQuery.data?.firm ?? d.firm;
+  const activeSettings = firmDetailsQuery.data?.settings ?? d.settings;
   const c = inv.clients!;
 
   const doCancel = async (reason: string) => {
@@ -125,7 +160,38 @@ function InvoiceView() {
           </Link>
           <StatusBadge status={invoiceDisplayStatus(inv)} />
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {userFirms && userFirms.length > 0 && (
+            <div className="flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1 text-xs shadow-xs">
+              <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="font-medium text-muted-foreground">Print As:</span>
+              <select
+                aria-label="Select billing firm name to print on invoice"
+                value={effectiveFirmId ?? ""}
+                onChange={async (e) => {
+                  const newFid = e.target.value;
+                  setSelectedFirmId(newFid);
+                  if (newFid) {
+                    try {
+                      await supabase.from("invoices").update({ firm_id: newFid }).eq("id", id);
+                      qc.invalidateQueries({ queryKey: ["invoice", id] });
+                      toast.success(`Invoice will print as "${userFirms.find((f) => f.id === newFid)?.name || "selected firm"}"`);
+                    } catch (err) {
+                      console.warn(err);
+                    }
+                  }
+                }}
+                className="bg-transparent font-semibold text-foreground focus:outline-none cursor-pointer"
+              >
+                {userFirms.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {inv.status !== "cancelled" && (
             <Button variant="outline" className="text-destructive" onClick={() => setCancel(true)}>
               <XCircle className="mr-1 h-4 w-4" />
@@ -140,17 +206,23 @@ function InvoiceView() {
       </div>
 
       <div className="rounded-lg border bg-card p-8 text-sm print:border-0 print:p-0">
-        <div className="flex justify-between border-b pb-4">
-          <div>
-            <div className="text-lg font-bold">{settings?.firm_name}</div>
-            <div className="whitespace-pre-line text-muted-foreground">{settings?.address}</div>
-            {settings?.gstin && <div>GSTIN: {settings.gstin}</div>}
-            {settings?.pan && <div>PAN: {settings.pan}</div>}
+        <div className="flex justify-between border-b pb-4 gap-4">
+          <div className="flex items-start gap-3">
+            {activeFirm?.logo_url && (
+              <img src={activeFirm.logo_url} alt="" className="h-12 w-12 object-contain rounded-md" />
+            )}
+            <div>
+              <div className="text-lg font-bold">{activeSettings?.firm_name || activeFirm?.name}</div>
+              <div className="whitespace-pre-line text-muted-foreground">{activeSettings?.address}</div>
+              {activeSettings?.gstin && <div>GSTIN: {activeSettings.gstin}</div>}
+              {activeSettings?.pan && <div>PAN: {activeSettings.pan}</div>}
+              {activeSettings?.phone && <div>Phone: {activeSettings.phone}</div>}
+            </div>
           </div>
-          <div className="text-right">
+          <div className="text-right shrink-0">
             <div className="text-xl font-semibold tracking-wide">TAX INVOICE</div>
             <div className="mt-1">
-              No: <span className="font-mono">{inv.invoice_no}</span>
+              No: <span className="font-mono font-bold">{inv.invoice_no}</span>
             </div>
             <div>Date: {fmtDate(inv.invoice_date)}</div>
             <div>Due: {fmtDate(inv.due_date)}</div>
@@ -220,13 +292,13 @@ function InvoiceView() {
           {words(Number(inv.total))} Only
         </div>
         {inv.notes && <div className="mt-2 text-xs text-muted-foreground">Notes: {inv.notes}</div>}
-        {settings?.bank_details && (
-          <div className="mt-2 whitespace-pre-line text-xs">Bank: {settings.bank_details}</div>
+        {activeSettings?.bank_details && (
+          <div className="mt-2 whitespace-pre-line text-xs">Bank: {activeSettings.bank_details}</div>
         )}
         <div className="mt-6 flex justify-between text-xs text-muted-foreground">
           <span />
           <span>
-            For {settings?.firm_name}
+            For {activeSettings?.firm_name || activeFirm?.name}
             <br />
             <br />
             Authorised Signatory

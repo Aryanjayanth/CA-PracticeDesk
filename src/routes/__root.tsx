@@ -132,6 +132,30 @@ function RootComponent() {
     return () => data.subscription.unsubscribe();
   }, [router, queryClient]);
 
+  // Make all number boxes static: completely prevent mouse wheel scroll from changing values
+  useEffect(() => {
+    const handleWheel = (e: WheelEvent) => {
+      const target = e.target;
+      const active = document.activeElement;
+      if (
+        (target instanceof HTMLInputElement && target.type === "number") ||
+        (active instanceof HTMLInputElement && active.type === "number")
+      ) {
+        if (target instanceof HTMLInputElement && target.type === "number") {
+          e.preventDefault();
+        }
+        if (active instanceof HTMLInputElement && active.type === "number") {
+          active.blur();
+        }
+      }
+    };
+
+    window.addEventListener("wheel", handleWheel, { passive: false });
+    return () => {
+      window.removeEventListener("wheel", handleWheel);
+    };
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <Outlet />

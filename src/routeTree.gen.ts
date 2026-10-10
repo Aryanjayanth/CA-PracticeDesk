@@ -29,6 +29,7 @@ import { Route as AuthenticatedReportsRouteImport } from './routes/_authenticate
 import { Route as AuthenticatedRolesRouteImport } from './routes/_authenticated/roles'
 import { Route as AuthenticatedServicesRouteImport } from './routes/_authenticated/services'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
+import { Route as AuthenticatedTasksRouteImport } from './routes/_authenticated/tasks'
 import { Route as AuthenticatedUnallocatedRouteImport } from './routes/_authenticated/unallocated'
 import { Route as AuthenticatedUsersRouteImport } from './routes/_authenticated/users'
 import { Route as AuthenticatedClearingJobIdRouteImport } from './routes/_authenticated/clearing.$jobId'
@@ -142,6 +143,11 @@ const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedTasksRoute = AuthenticatedTasksRouteImport.update({
+  id: '/tasks',
+  path: '/tasks',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedUnallocatedRoute =
   AuthenticatedUnallocatedRouteImport.update({
     id: '/unallocated',
@@ -218,6 +224,7 @@ export interface FileRoutesByFullPath {
   '/roles': typeof AuthenticatedRolesRoute
   '/services': typeof AuthenticatedServicesRoute
   '/settings': typeof AuthenticatedSettingsRoute
+  '/tasks': typeof AuthenticatedTasksRoute
   '/unallocated': typeof AuthenticatedUnallocatedRoute
   '/users': typeof AuthenticatedUsersRoute
   '/clearing/$jobId': typeof AuthenticatedClearingJobIdRoute
@@ -249,6 +256,7 @@ export interface FileRoutesByTo {
   '/roles': typeof AuthenticatedRolesRoute
   '/services': typeof AuthenticatedServicesRoute
   '/settings': typeof AuthenticatedSettingsRoute
+  '/tasks': typeof AuthenticatedTasksRoute
   '/unallocated': typeof AuthenticatedUnallocatedRoute
   '/users': typeof AuthenticatedUsersRoute
   '/clearing/$jobId': typeof AuthenticatedClearingJobIdRoute
@@ -282,6 +290,7 @@ export interface FileRoutesById {
   '/_authenticated/roles': typeof AuthenticatedRolesRoute
   '/_authenticated/services': typeof AuthenticatedServicesRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
+  '/_authenticated/tasks': typeof AuthenticatedTasksRoute
   '/_authenticated/unallocated': typeof AuthenticatedUnallocatedRoute
   '/_authenticated/users': typeof AuthenticatedUsersRoute
   '/_authenticated/clearing/$jobId': typeof AuthenticatedClearingJobIdRoute
@@ -315,6 +324,7 @@ export interface FileRouteTypes {
     | '/roles'
     | '/services'
     | '/settings'
+    | '/tasks'
     | '/unallocated'
     | '/users'
     | '/clearing/$jobId'
@@ -346,6 +356,7 @@ export interface FileRouteTypes {
     | '/roles'
     | '/services'
     | '/settings'
+    | '/tasks'
     | '/unallocated'
     | '/users'
     | '/clearing/$jobId'
@@ -378,6 +389,7 @@ export interface FileRouteTypes {
     | '/_authenticated/roles'
     | '/_authenticated/services'
     | '/_authenticated/settings'
+    | '/_authenticated/tasks'
     | '/_authenticated/unallocated'
     | '/_authenticated/users'
     | '/_authenticated/clearing/$jobId'
@@ -539,6 +551,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/tasks': {
+      id: '/_authenticated/tasks'
+      path: '/tasks'
+      fullPath: '/tasks'
+      preLoaderRoute: typeof AuthenticatedTasksRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/unallocated': {
       id: '/_authenticated/unallocated'
       path: '/unallocated'
@@ -642,6 +661,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedRolesRoute: typeof AuthenticatedRolesRoute
   AuthenticatedServicesRoute: typeof AuthenticatedServicesRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
+  AuthenticatedTasksRoute: typeof AuthenticatedTasksRoute
   AuthenticatedUnallocatedRoute: typeof AuthenticatedUnallocatedRoute
   AuthenticatedUsersRoute: typeof AuthenticatedUsersRoute
   AuthenticatedClientsIdRoute: typeof AuthenticatedClientsIdRoute
@@ -670,6 +690,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedRolesRoute: AuthenticatedRolesRoute,
   AuthenticatedServicesRoute: AuthenticatedServicesRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
+  AuthenticatedTasksRoute: AuthenticatedTasksRoute,
   AuthenticatedUnallocatedRoute: AuthenticatedUnallocatedRoute,
   AuthenticatedUsersRoute: AuthenticatedUsersRoute,
   AuthenticatedClientsIdRoute: AuthenticatedClientsIdRoute,

@@ -116,7 +116,7 @@ async function doInvite(input: z.infer<typeof inviteSchema>) {
   }
 
   // 2. Record the invite in firm_invites
-  const { error: insErr } = await supabaseAdmin.from("firm_invites").insert({
+  const { error: insErr } = await (supabaseAdmin.from("firm_invites") as any).insert({
     firm_id: input.firmId,
     email: email,
     role: input.role,
@@ -252,7 +252,7 @@ export const generateLoginLink = createServerFn({ method: "POST" })
           .delete()
           .ilike("email", email)
           .eq("firm_id", data.firmId);
-        await supabaseAdmin.from("firm_invites").insert({
+        await (supabaseAdmin.from("firm_invites") as any).insert({
           firm_id: data.firmId,
           email: email,
           role: data.role || "staff",
@@ -338,6 +338,11 @@ export const verifyOtpAndSetPassword = createServerFn({ method: "POST" })
       console.warn("[verifyOtpAndSetPassword] listUsers warn:", listErr);
     }
 
+    let isValid = false;
+    let firmId = matchedInvite?.firm_id;
+    let role = matchedInvite?.role;
+    let fullName = matchedInvite?.full_name;
+
     // Fallback: check profiles table by email
     if (!userId) {
       try {
@@ -355,11 +360,6 @@ export const verifyOtpAndSetPassword = createServerFn({ method: "POST" })
         console.warn("[verifyOtpAndSetPassword] profile check warn:", profErr);
       }
     }
-
-    let isValid = false;
-    let firmId = matchedInvite?.firm_id;
-    let role = matchedInvite?.role;
-    let fullName = matchedInvite?.full_name;
 
     // Check if OTP matches firm_invites
     if (matchedInvite?.otp_code && String(matchedInvite.otp_code).trim() === otp) {
